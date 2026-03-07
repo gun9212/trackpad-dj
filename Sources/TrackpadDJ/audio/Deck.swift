@@ -46,4 +46,9 @@ final class Deck {
     var trackName: String? {
         file?.url.deletingPathExtension().lastPathComponent
     }
+
+    /// The processing format of the loaded file, used to reconnect the player node.
+    var processingFormat: AVAudioFormat? {
+        file?.processingFormat
+    }
 }

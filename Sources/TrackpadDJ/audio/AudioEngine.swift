@@ -43,9 +43,13 @@ final class AudioEngine {
     // MARK: - Track Loading
 
     func loadTrack(url: URL, deck: DeckID) throws {
-        switch deck {
-        case .a: try deckA.load(url: url)
-        case .b: try deckB.load(url: url)
+        let d = deck == .a ? deckA : deckB
+        try d.load(url: url)
+        // Reconnect with the file's actual processing format so AVAudioEngine
+        // uses the correct sample rate and channel layout.
+        if let format = d.processingFormat {
+            engine.disconnectNodeOutput(d.player)
+            engine.connect(d.player, to: engine.mainMixerNode, format: format)
         }
     }
 
