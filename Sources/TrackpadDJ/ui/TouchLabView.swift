@@ -9,6 +9,18 @@ final class TouchLabView: NSView {
 
     private var crossfader = CrossfaderState.center
 
+    // MARK: - Audio Callbacks (set by ViewController)
+
+    var onCrossfaderChanged: ((CrossfaderState) -> Void)?
+    var onLoadDeck: ((AudioEngine.DeckID) -> Void)?
+    var onTogglePlay: ((AudioEngine.DeckID) -> Void)?
+    var onCue: ((AudioEngine.DeckID) -> Void)?
+
+    // MARK: - Deck Status (updated by ViewController)
+
+    var deckALabel: String = "A: —" { didSet { needsDisplay = true } }
+    var deckBLabel: String = "B: —" { didSet { needsDisplay = true } }
+
     // MARK: - Init
 
     override init(frame frameRect: NSRect) {
@@ -35,10 +47,18 @@ final class TouchLabView: NSView {
             crossfader = cmd ? crossfader.snapped(to: .deckA)
                              : crossfader.nudged(by: -CrossfaderState.step)
             needsDisplay = true
+            onCrossfaderChanged?(crossfader)
         case 124: // →
             crossfader = cmd ? crossfader.snapped(to: .deckB)
                              : crossfader.nudged(by: +CrossfaderState.step)
             needsDisplay = true
+            onCrossfaderChanged?(crossfader)
+        case 12: onLoadDeck?(.a)    // Q → load Deck A
+        case 13: onLoadDeck?(.b)    // W → load Deck B
+        case 0:  onTogglePlay?(.a)  // A → play/pause Deck A
+        case 1:  onTogglePlay?(.b)  // S → play/pause Deck B
+        case 6:  onCue?(.a)         // Z → cue Deck A
+        case 7:  onCue?(.b)         // X → cue Deck B
         default:
             super.keyDown(with: event)
         }
@@ -167,16 +187,37 @@ final class TouchLabView: NSView {
     }
 
     private func drawHUD() {
-        let left = "Touch Lab"
-        let right = "fingers: \(session.count)"
         let attrs: [NSAttributedString.Key: Any] = [
             .foregroundColor: NSColor.white.withAlphaComponent(0.35),
             .font: NSFont.monospacedSystemFont(ofSize: 10, weight: .regular),
         ]
-        NSAttributedString(string: left, attributes: attrs).draw(at: NSPoint(x: 8, y: bounds.height - 18))
-        let rightStr = NSAttributedString(string: right, attributes: attrs)
-        let rightX = bounds.width - rightStr.size().width - 8
-        rightStr.draw(at: NSPoint(x: rightX, y: bounds.height - 18))
+        let top = bounds.height - 18
+        NSAttributedString(string: "Touch Lab", attributes: attrs)
+            .draw(at: NSPoint(x: 8, y: top))
+
+        let fingerStr = NSAttributedString(string: "fingers: \(session.count)", attributes: attrs)
+        let fingerX = bounds.width - fingerStr.size().width - 8
+        fingerStr.draw(at: NSPoint(x: fingerX, y: top))
+
+        // Deck status (bottom-left)
+        let deckAttrs: [NSAttributedString.Key: Any] = [
+            .foregroundColor: NSColor.white.withAlphaComponent(0.55),
+            .font: NSFont.monospacedSystemFont(ofSize: 10, weight: .regular),
+        ]
+        NSAttributedString(string: deckALabel, attributes: deckAttrs).draw(at: NSPoint(x: 8, y: 8))
+        let bStr = NSAttributedString(string: deckBLabel, attributes: deckAttrs)
+        let bX = bounds.width - bStr.size().width - 8
+        bStr.draw(at: NSPoint(x: bX, y: 8))
+
+        // Key hint (center bottom)
+        let hint = "Q/W: load  A/S: play  Z/X: cue  ←/→: xfade"
+        let hintAttrs: [NSAttributedString.Key: Any] = [
+            .foregroundColor: NSColor.white.withAlphaComponent(0.2),
+            .font: NSFont.monospacedSystemFont(ofSize: 9, weight: .regular),
+        ]
+        let hintStr = NSAttributedString(string: hint, attributes: hintAttrs)
+        let hintX = (bounds.width - hintStr.size().width) / 2
+        hintStr.draw(at: NSPoint(x: hintX, y: 8))
     }
 
     private func drawCrossfaderIndicator() {
