@@ -8,6 +8,16 @@ final class TouchLabView: NSView {
     }
 
     private var crossfader = CrossfaderState.center
+    private var crossfaderMode: Int = 1                          // 0=A, 1=both, 2=B
+    private let crossfaderModeValues: [Float] = [0.0, 0.5, 1.0]
+
+    // Key hold directions: -1, 0, +1  (driven by 60fps timer)
+    private var volumeKeyA: Float = 0
+    private var volumeKeyB: Float = 0
+    private var filterKeyA: Float = 0
+    private var filterKeyB: Float = 0
+    private var nudgeKeyA:  Float = 0
+    private var nudgeKeyB:  Float = 0
 
     // MARK: - Audio Callbacks (set by ViewController)
 
@@ -41,15 +51,16 @@ final class TouchLabView: NSView {
 
     override init(frame frameRect: NSRect) {
         super.init(frame: frameRect)
-        // .indirect = trackpad touches (as opposed to direct stylus/screen touches)
         allowedTouchTypes = [.indirect]
         wantsRestingTouches = false
+        startKeyHoldTimer()
     }
 
     required init?(coder: NSCoder) {
         super.init(coder: coder)
         allowedTouchTypes = [.indirect]
         wantsRestingTouches = false
+        startKeyHoldTimer()
     }
 
     override var acceptsFirstResponder: Bool { true }
@@ -57,27 +68,74 @@ final class TouchLabView: NSView {
     // MARK: - Keyboard Events
 
     override func keyDown(with event: NSEvent) {
-        let cmd = event.modifierFlags.contains(.command)
         switch event.keyCode {
+        // Crossfader: 3-mode snap (A=0 / both=0.5 / B=1). One-shot, no repeat.
         case 123: // ←
-            crossfader = cmd ? crossfader.snapped(to: .deckA)
-                             : crossfader.nudged(by: -CrossfaderState.step)
-            needsDisplay = true
-            onCrossfaderChanged?(crossfader)
+            if !event.isARepeat {
+                crossfaderMode = max(0, crossfaderMode - 1)
+                crossfader = CrossfaderState(value: crossfaderModeValues[crossfaderMode])
+                needsDisplay = true
+                onCrossfaderChanged?(crossfader)
+            }
         case 124: // →
-            crossfader = cmd ? crossfader.snapped(to: .deckB)
-                             : crossfader.nudged(by: +CrossfaderState.step)
-            needsDisplay = true
-            onCrossfaderChanged?(crossfader)
-        case 12: onLoadDeck?(.a)    // Q → load Deck A
-        case 13: onLoadDeck?(.b)    // W → load Deck B
-        case 0:  onTogglePlay?(.a)  // A → play/pause Deck A
-        case 1:  onTogglePlay?(.b)  // S → play/pause Deck B
-        case 6:  onCue?(.a)         // Z → cue Deck A
-        case 7:  onCue?(.b)         // X → cue Deck B
+            if !event.isARepeat {
+                crossfaderMode = min(2, crossfaderMode + 1)
+                crossfader = CrossfaderState(value: crossfaderModeValues[crossfaderMode])
+                needsDisplay = true
+                onCrossfaderChanged?(crossfader)
+            }
+        // One-shot transport
+        case 12: if !event.isARepeat { onLoadDeck?(.a) }   // Q
+        case 13: if !event.isARepeat { onLoadDeck?(.b) }   // W
+        case 0:  if !event.isARepeat { onTogglePlay?(.a) } // A
+        case 1:  if !event.isARepeat { onTogglePlay?(.b) } // S
+        case 6:  if !event.isARepeat { onCue?(.a) }        // Z
+        case 7:  if !event.isARepeat { onCue?(.b) }        // X
+        // Hold keys: set direction, 60fps timer drives the callbacks
+        case 14: volumeKeyA = +1  // E
+        case 2:  volumeKeyA = -1  // D
+        case 15: volumeKeyB = +1  // R
+        case 3:  volumeKeyB = -1  // F
+        case 17: filterKeyA = +1  // T
+        case 5:  filterKeyA = -1  // G
+        case 16: filterKeyB = +1  // Y
+        case 4:  filterKeyB = -1  // H
+        case 126: nudgeKeyA = +1  // up arrow
+        case 125: nudgeKeyA = -1  // down arrow
+        case 34:  nudgeKeyB = +1  // I
+        case 40:  nudgeKeyB = -1  // K
         default:
             super.keyDown(with: event)
         }
+    }
+
+    override func keyUp(with event: NSEvent) {
+        switch event.keyCode {
+        case 14, 2:    volumeKeyA = 0
+        case 15, 3:    volumeKeyB = 0
+        case 17, 5:    filterKeyA = 0
+        case 16, 4:    filterKeyB = 0
+        case 126, 125: nudgeKeyA = 0
+        case 34, 40:   nudgeKeyB = 0
+        default: super.keyUp(with: event)
+        }
+    }
+
+    // MARK: - Key Hold Timer
+
+    private func startKeyHoldTimer() {
+        Timer.scheduledTimer(withTimeInterval: 1.0 / 60.0, repeats: true) { [weak self] _ in
+            self?.applyHeldKeys()
+        }
+    }
+
+    private func applyHeldKeys() {
+        if volumeKeyA != 0 { onVolume?(.a, volumeKeyA * 0.008) }  // full range ~2 s
+        if volumeKeyB != 0 { onVolume?(.b, volumeKeyB * 0.008) }
+        if filterKeyA != 0 { onFilter?(.a, filterKeyA * 0.003) }  // full sweep ~5 s
+        if filterKeyB != 0 { onFilter?(.b, filterKeyB * 0.003) }
+        if nudgeKeyA  != 0 { onNudge?(.a, nudgeKeyA  * 0.001) }   // ~1 s of track per s held
+        if nudgeKeyB  != 0 { onNudge?(.b, nudgeKeyB  * 0.001) }
     }
 
     // MARK: - Touch Events
@@ -330,7 +388,7 @@ final class TouchLabView: NSView {
         bStr.draw(at: NSPoint(x: bX, y: 8))
 
         // Key hint (center bottom)
-        let hint = "Q/W: load  A/S: play  Z/X: cue  ←/→: xfade"
+        let hint = "Q/W:load  A/S:play  Z/X:cue  E·D/R·F:vol  T·G/Y·H:filter  ↑·↓/I·K:nudge  ←/→:xfade"
         let hintAttrs: [NSAttributedString.Key: Any] = [
             .foregroundColor: NSColor.white.withAlphaComponent(0.2),
             .font: NSFont.monospacedSystemFont(ofSize: 9, weight: .regular),
