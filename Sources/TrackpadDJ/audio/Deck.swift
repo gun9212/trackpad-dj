@@ -2,11 +2,17 @@ import AVFoundation
 
 /// A single playback deck wrapping AVAudioPlayerNode.
 /// Supports load, play/pause toggle, cue, and seek-based scrubbing.
-final class Deck {
+final class Deck: DeckProtocol {
 
     let player = AVAudioPlayerNode()
 
     private(set) var isPlaying = false
+
+    /// Output volume [0, 1]. Set by crossfader or deck fader.
+    var volume: Float {
+        get { player.volume }
+        set { player.volume = newValue }
+    }
     private var file: AVAudioFile?
     private var isScheduled = false
     private(set) var currentFrame: AVAudioFramePosition = 0
