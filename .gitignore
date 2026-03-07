@@ -1,0 +1,27 @@
+# Swift build artifacts
+.build/
+*.o
+*.d
+
+# Swift Package Manager
+.swiftpm/
+
+# Xcode
+xcuserdata/
+*.xcuserstate
+*.xcworkspace/xcuserdata/
+DerivedData/
+
+# OMC session state (machine-specific, transient)
+.omc/
+
+# Claude Code local settings
+.claude/settings.local.json
+
+# Markdown (README.md 제외)
+*.md
+!README.md
+
+# macOS
+.DS_Store
+**/.DS_Store
