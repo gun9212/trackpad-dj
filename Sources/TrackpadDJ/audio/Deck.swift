@@ -15,6 +15,15 @@ final class Deck: DeckProtocol {
     /// Always connected to the engine; survives file changes.
     let mixerNode = AVAudioMixerNode()
 
+    /// Stable lowpass EQ node. Cutoff controlled by 2-finger vertical gesture.
+    let eqNode: AVAudioUnitEQ = {
+        let eq = AVAudioUnitEQ(numberOfBands: 1)
+        eq.bands[0].filterType = .lowPass
+        eq.bands[0].frequency = 20_000
+        eq.bands[0].bypass = false
+        return eq
+    }()
+
     /// Recreated on each file load. Managed by AudioEngine.
     private(set) var sourceNode: AVAudioSourceNode?
 
@@ -27,6 +36,13 @@ final class Deck: DeckProtocol {
     var volume: Float {
         get { mixerNode.outputVolume }
         set { mixerNode.outputVolume = newValue }
+    }
+
+    private(set) var waveformSamples: [Float] = []
+
+    var playbackProgress: Double {
+        guard let buf = buffer, buf.frameLength > 0 else { return 0 }
+        return min(readPosition / Double(buf.frameLength), 1.0)
     }
 
     // Accessed from both main thread and audio render thread.
@@ -51,6 +67,7 @@ final class Deck: DeckProtocol {
         trackName = file.url.deletingPathExtension().lastPathComponent
         processingFormat = format
         readPosition = 0.0
+        waveformSamples = Self.downsample(buf, targetCount: 800)
         buffer = buf
 
         sourceNode = AVAudioSourceNode(format: format) { [weak self] isSilence, _, frameCount, audioBufferList -> OSStatus in
@@ -78,6 +95,31 @@ final class Deck: DeckProtocol {
         // 15 seconds per full trackpad width
         let frameDelta = normalizedDelta * 15.0 * buf.format.sampleRate
         readPosition = max(0, min(Double(buf.frameLength) - 1, readPosition + frameDelta))
+    }
+
+    // MARK: - Waveform Downsampling
+
+    private static func downsample(_ buffer: AVAudioPCMBuffer, targetCount: Int) -> [Float] {
+        guard let channelData = buffer.floatChannelData else { return [] }
+        let totalFrames = Int(buffer.frameLength)
+        let channelCount = Int(buffer.format.channelCount)
+        guard totalFrames > 0, targetCount > 0 else { return [] }
+
+        let chunkSize = max(1, totalFrames / targetCount)
+        var result = [Float](repeating: 0, count: targetCount)
+
+        for i in 0..<targetCount {
+            let start = i * chunkSize
+            let end = min(start + chunkSize, totalFrames)
+            var peak: Float = 0
+            for frame in start..<end {
+                for ch in 0..<channelCount {
+                    peak = max(peak, abs(channelData[ch][frame]))
+                }
+            }
+            result[i] = peak
+        }
+        return result
     }
 
     // MARK: - Render Callback (audio thread)

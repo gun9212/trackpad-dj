@@ -26,4 +26,12 @@ protocol DeckProtocol: AnyObject {
     /// Scrub forward (positive) or backward (negative) by a normalized delta.
     /// Full trackpad width (1.0) corresponds to a fixed number of seconds.
     func scrub(normalizedDelta: Double)
+
+    // MARK: - Waveform
+
+    /// Peak-amplitude waveform data, downsampled on load. Empty until a track is loaded.
+    var waveformSamples: [Float] { get }
+
+    /// Playback position normalized to [0, 1].
+    var playbackProgress: Double { get }
 }

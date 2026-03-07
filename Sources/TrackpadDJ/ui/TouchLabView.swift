@@ -18,11 +18,20 @@ final class TouchLabView: NSView {
     /// deltaX: normalized horizontal movement per event (positive = right)
     var onNudge: ((AudioEngine.DeckID, Float) -> Void)?
     var onNudgeEnd: ((AudioEngine.DeckID) -> Void)?
+    /// deltaY: normalized vertical movement per event (positive = up = open filter)
+    var onFilter: ((AudioEngine.DeckID, Float) -> Void)?
 
     // MARK: - Deck Status (updated by ViewController)
 
     var deckALabel: String = "A: —" { didSet { needsDisplay = true } }
     var deckBLabel: String = "B: —" { didSet { needsDisplay = true } }
+
+    // MARK: - Waveform Data (updated by ViewController)
+
+    var waveformA: [Float] = [] { didSet { needsDisplay = true } }
+    var waveformB: [Float] = [] { didSet { needsDisplay = true } }
+    var progressA: Double = 0 { didSet { needsDisplay = true } }
+    var progressB: Double = 0 { didSet { needsDisplay = true } }
 
     // MARK: - Init
 
@@ -84,17 +93,26 @@ final class TouchLabView: NSView {
 
     override func touchesMoved(with event: NSEvent) {
         var updated = session
+
+        // Count all active touches per deck zone to distinguish 1-finger (jog) from 2-finger (filter).
+        let touchesInA = session.activeTouches.values.filter { ZoneLayout.zone(for: $0.position)?.name == .deckA }.count
+        let touchesInB = session.activeTouches.values.filter { ZoneLayout.zone(for: $0.position)?.name == .deckB }.count
+
         for touch in event.touches(matching: .moved, in: self) {
             let id = ObjectIdentifier(touch.identity as AnyObject)
             let newPos = touch.normalizedPosition
 
-            // Compute horizontal delta for jog, using previous stored position.
             if let prevPos = session.activeTouches[id]?.position,
                let zone = ZoneLayout.zone(for: newPos) {
                 let deltaX = Float(newPos.x - prevPos.x)
+                let deltaY = Float(newPos.y - prevPos.y)
                 switch zone.name {
-                case .deckA: onNudge?(.a, deltaX)
-                case .deckB: onNudge?(.b, deltaX)
+                case .deckA:
+                    if touchesInA >= 2 { onFilter?(.a, deltaY) }
+                    else               { onNudge?(.a, deltaX) }
+                case .deckB:
+                    if touchesInB >= 2 { onFilter?(.b, deltaY) }
+                    else               { onNudge?(.b, deltaX) }
                 default: break
                 }
             }
@@ -141,6 +159,7 @@ final class TouchLabView: NSView {
     override func draw(_ dirtyRect: NSRect) {
         drawBackground()
         drawZones()
+        drawWaveforms()
         drawCrossfaderIndicator()
         drawTouches()
         drawHUD()
@@ -179,6 +198,71 @@ final class TouchLabView: NSView {
         let size = str.size()
         let point = NSPoint(x: rect.midX - size.width / 2, y: rect.midY - size.height / 2)
         str.draw(at: point)
+    }
+
+    private func drawWaveforms() {
+        if let zone = ZoneLayout.all.first(where: { $0.name == .deckA }) {
+            drawWaveform(waveformA, progress: progressA, in: viewRect(from: zone.rect),
+                         color: zoneColor(for: .deckA))
+        }
+        if let zone = ZoneLayout.all.first(where: { $0.name == .deckB }) {
+            drawWaveform(waveformB, progress: progressB, in: viewRect(from: zone.rect),
+                         color: zoneColor(for: .deckB))
+        }
+    }
+
+    private func drawWaveform(_ samples: [Float], progress: Double, in rect: NSRect, color: NSColor) {
+        guard samples.count > 1 else { return }
+
+        let mid = rect.midY
+        let halfH = rect.height * 0.4  // waveform uses 80% of zone height
+
+        // Filled waveform shape
+        let path = NSBezierPath()
+        // Top half (forward pass)
+        for (i, amp) in samples.enumerated() {
+            let x = rect.minX + CGFloat(i) / CGFloat(samples.count) * rect.width
+            let y = mid + CGFloat(amp) * halfH
+            if i == 0 { path.move(to: NSPoint(x: x, y: y)) }
+            else       { path.line(to: NSPoint(x: x, y: y)) }
+        }
+        // Bottom half (reverse pass)
+        for i in stride(from: samples.count - 1, through: 0, by: -1) {
+            let x = rect.minX + CGFloat(i) / CGFloat(samples.count) * rect.width
+            let y = mid - CGFloat(samples[i]) * halfH
+            path.line(to: NSPoint(x: x, y: y))
+        }
+        path.close()
+        color.withAlphaComponent(0.25).setFill()
+        path.fill()
+
+        // Played region overlay (brighter)
+        let playedWidth = rect.width * CGFloat(progress)
+        let playedPath = NSBezierPath()
+        for i in 0..<samples.count {
+            let x = rect.minX + CGFloat(i) / CGFloat(samples.count) * rect.width
+            guard x <= rect.minX + playedWidth else { break }
+            let y = mid + CGFloat(samples[i]) * halfH
+            if i == 0 { playedPath.move(to: NSPoint(x: x, y: y)) }
+            else       { playedPath.line(to: NSPoint(x: x, y: y)) }
+        }
+        for i in stride(from: samples.count - 1, through: 0, by: -1) {
+            let x = rect.minX + CGFloat(i) / CGFloat(samples.count) * rect.width
+            guard x <= rect.minX + playedWidth else { continue }
+            playedPath.line(to: NSPoint(x: x, y: mid - CGFloat(samples[i]) * halfH))
+        }
+        playedPath.close()
+        color.withAlphaComponent(0.55).setFill()
+        playedPath.fill()
+
+        // Playhead vertical line
+        let headX = rect.minX + CGFloat(progress) * rect.width
+        let headPath = NSBezierPath()
+        headPath.move(to: NSPoint(x: headX, y: rect.minY + 4))
+        headPath.line(to: NSPoint(x: headX, y: rect.maxY - 4))
+        headPath.lineWidth = 1.5
+        NSColor.white.withAlphaComponent(0.9).setStroke()
+        headPath.stroke()
     }
 
     private func drawTouches() {

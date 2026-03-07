@@ -6,11 +6,26 @@ final class TouchLabViewController: NSViewController {
 
     private var touchLabView: TouchLabView!
     private let audioEngine = AudioEngine()
+    private var displayTimer: Timer?
 
     override func loadView() {
         touchLabView = TouchLabView(frame: NSRect(x: 0, y: 0, width: 900, height: 600))
         view = touchLabView
         wireCallbacks()
+        startDisplayTimer()
+    }
+
+    // MARK: - Display Timer (30 fps playhead update)
+
+    private func startDisplayTimer() {
+        displayTimer = Timer.scheduledTimer(withTimeInterval: 1.0 / 30.0, repeats: true) { [weak self] _ in
+            self?.refreshPlayheads()
+        }
+    }
+
+    private func refreshPlayheads() {
+        touchLabView.progressA = audioEngine.deckA.playbackProgress
+        touchLabView.progressB = audioEngine.deckB.playbackProgress
     }
 
     override func viewDidAppear() {
@@ -44,6 +59,10 @@ final class TouchLabViewController: NSViewController {
         }
 
         touchLabView.onNudgeEnd = { _ in }  // no-op: seek-based scrub needs no reset
+
+        touchLabView.onFilter = { [weak self] deckID, deltaY in
+            self?.audioEngine.setFilter(deck: deckID, deltaY: deltaY)
+        }
     }
 
     // MARK: - File Loading
@@ -58,7 +77,10 @@ final class TouchLabViewController: NSViewController {
             guard response == .OK, let url = panel.url, let self = self else { return }
             do {
                 try self.audioEngine.loadTrack(url: url, deck: deckID)
-                DispatchQueue.main.async { self.refreshDeckLabels() }
+                DispatchQueue.main.async {
+                    self.refreshDeckLabels()
+                    self.refreshWaveform(deck: deckID)
+                }
             } catch {
                 print("Load error: \(error)")
             }
@@ -66,6 +88,13 @@ final class TouchLabViewController: NSViewController {
     }
 
     // MARK: - HUD Updates
+
+    private func refreshWaveform(deck: AudioEngine.DeckID) {
+        switch deck {
+        case .a: touchLabView.waveformA = audioEngine.deckA.waveformSamples
+        case .b: touchLabView.waveformB = audioEngine.deckB.waveformSamples
+        }
+    }
 
     private func refreshDeckLabels() {
         let a = audioEngine.deckA
