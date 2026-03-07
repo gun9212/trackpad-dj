@@ -38,6 +38,12 @@ final class TouchLabViewController: NSViewController {
             self?.audioEngine.cue(deck: deckID)
             self?.refreshDeckLabels()
         }
+
+        touchLabView.onNudge = { [weak self] deckID, deltaX in
+            self?.audioEngine.scrub(deck: deckID, deltaX: deltaX)
+        }
+
+        touchLabView.onNudgeEnd = { _ in }  // no-op: seek-based scrub needs no reset
     }
 
     // MARK: - File Loading

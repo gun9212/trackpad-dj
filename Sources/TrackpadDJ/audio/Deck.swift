@@ -1,7 +1,7 @@
 import AVFoundation
 
 /// A single playback deck wrapping AVAudioPlayerNode.
-/// Supports load, play/pause toggle, and cue (return to start).
+/// Supports load, play/pause toggle, cue, and seek-based scrubbing.
 final class Deck {
 
     let player = AVAudioPlayerNode()
@@ -9,12 +9,14 @@ final class Deck {
     private(set) var isPlaying = false
     private var file: AVAudioFile?
     private var isScheduled = false
+    private(set) var currentFrame: AVAudioFramePosition = 0
 
     // MARK: - Transport
 
     func load(url: URL) throws {
         player.stop()
         file = try AVAudioFile(forReading: url)
+        currentFrame = 0
         isScheduled = false
         isPlaying = false
     }
@@ -26,8 +28,7 @@ final class Deck {
             isPlaying = false
         } else {
             if !isScheduled {
-                player.scheduleFile(file, at: nil)
-                isScheduled = true
+                scheduleFromCurrentFrame(file)
             }
             player.play()
             isPlaying = true
@@ -38,17 +39,48 @@ final class Deck {
     func cue() {
         guard let file = file else { return }
         player.stop()
-        player.scheduleFile(file, at: nil)
-        isScheduled = true
+        currentFrame = 0
+        scheduleFromCurrentFrame(file)
         isPlaying = false
     }
+
+    // MARK: - Scrubbing
+
+    /// Seek by a normalized delta [-1, 1] relative to the full track length.
+    /// Positive = forward, negative = backward.
+    func scrub(normalizedDelta: Double) {
+        guard let file = file else { return }
+        let sampleRate = file.fileFormat.sampleRate
+        // 15 seconds per full trackpad width
+        let frameDelta = AVAudioFramePosition(normalizedDelta * 15.0 * sampleRate)
+        let newFrame = max(0, min(file.length - 1, currentFrame + frameDelta))
+        guard newFrame != currentFrame else { return }
+        currentFrame = newFrame
+
+        let wasPlaying = isPlaying
+        player.stop()
+        scheduleFromCurrentFrame(file)
+        if wasPlaying {
+            player.play()
+        }
+    }
+
+    // MARK: - Info
 
     var trackName: String? {
         file?.url.deletingPathExtension().lastPathComponent
     }
 
-    /// The processing format of the loaded file, used to reconnect the player node.
     var processingFormat: AVAudioFormat? {
         file?.processingFormat
+    }
+
+    // MARK: - Private
+
+    private func scheduleFromCurrentFrame(_ file: AVAudioFile) {
+        let remaining = AVAudioFrameCount(file.length - currentFrame)
+        guard remaining > 0 else { return }
+        player.scheduleSegment(file, startingFrame: currentFrame, frameCount: remaining, at: nil)
+        isScheduled = true
     }
 }

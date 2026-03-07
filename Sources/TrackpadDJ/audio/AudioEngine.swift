@@ -1,7 +1,7 @@
 import AVFoundation
 
 /// Owns the AVAudioEngine and both decks.
-/// Crossfader is applied as a linear volume split across the two player nodes.
+/// Signal chain: player → mainMixerNode (reconnected with file format on load)
 final class AudioEngine {
 
     enum DeckID { case a, b }
@@ -45,8 +45,7 @@ final class AudioEngine {
     func loadTrack(url: URL, deck: DeckID) throws {
         let d = deck == .a ? deckA : deckB
         try d.load(url: url)
-        // Reconnect with the file's actual processing format so AVAudioEngine
-        // uses the correct sample rate and channel layout.
+        // Reconnect with the file's actual processing format.
         if let format = d.processingFormat {
             engine.disconnectNodeOutput(d.player)
             engine.connect(d.player, to: engine.mainMixerNode, format: format)
@@ -66,6 +65,17 @@ final class AudioEngine {
         switch deck {
         case .a: deckA.cue()
         case .b: deckB.cue()
+        }
+    }
+
+    // MARK: - Scrubbing
+
+    /// Called on each touchesMoved event in a deck zone.
+    /// deltaX is normalized trackpad delta (positive = forward in track).
+    func scrub(deck: DeckID, deltaX: Float) {
+        switch deck {
+        case .a: deckA.scrub(normalizedDelta: Double(deltaX))
+        case .b: deckB.scrub(normalizedDelta: Double(deltaX))
         }
     }
 }
