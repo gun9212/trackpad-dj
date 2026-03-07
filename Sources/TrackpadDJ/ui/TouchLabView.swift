@@ -113,6 +113,10 @@ final class TouchLabView: NSView {
                 case .deckB:
                     if touchesInB >= 2 { onFilter?(.b, deltaY) }
                     else               { onNudge?(.b, deltaX) }
+                case .bottomStrip:
+                    crossfader = crossfader.nudged(by: deltaX)
+                    needsDisplay = true
+                    onCrossfaderChanged?(crossfader)
                 default: break
                 }
             }
