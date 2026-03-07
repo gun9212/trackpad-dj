@@ -26,6 +26,11 @@ final class AudioEngine {
     private var cutoffA: Float = 20_000
     private var cutoffB: Float = 20_000
 
+    // Deck channel faders [0, 1]. Combined with crossfader for final volume.
+    private(set) var faderA: Float = 1.0
+    private(set) var faderB: Float = 1.0
+    private var crossfaderValue: Float = 0.5
+
     private func setup() {
         // Attach stable nodes — these persist across file loads.
         // Signal chain: sourceNode → mixerNode → eqNode → mainMixerNode
@@ -51,8 +56,24 @@ final class AudioEngine {
 
     /// Linear crossfade: value 0 = full A, 1 = full B.
     func applyCrossfader(_ state: CrossfaderState) {
-        _deckA.volume = 1.0 - state.value
-        _deckB.volume = state.value
+        crossfaderValue = state.value
+        applyVolumes()
+    }
+
+    // MARK: - Channel Faders
+
+    /// Adjust channel fader by vertical touch delta. Full height = full range.
+    func setFader(deck: DeckID, deltaY: Float) {
+        switch deck {
+        case .a: faderA = max(0, min(1, faderA + deltaY))
+        case .b: faderB = max(0, min(1, faderB + deltaY))
+        }
+        applyVolumes()
+    }
+
+    private func applyVolumes() {
+        _deckA.volume = faderA * (1.0 - crossfaderValue)
+        _deckB.volume = faderB * crossfaderValue
     }
 
     // MARK: - Track Loading

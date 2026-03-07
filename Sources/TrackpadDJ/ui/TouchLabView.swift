@@ -20,6 +20,8 @@ final class TouchLabView: NSView {
     var onNudgeEnd: ((AudioEngine.DeckID) -> Void)?
     /// deltaY: normalized vertical movement per event (positive = up = open filter)
     var onFilter: ((AudioEngine.DeckID, Float) -> Void)?
+    /// deltaY: normalized vertical movement per event (positive = up = louder)
+    var onVolume: ((AudioEngine.DeckID, Float) -> Void)?
 
     // MARK: - Deck Status (updated by ViewController)
 
@@ -32,6 +34,8 @@ final class TouchLabView: NSView {
     var waveformB: [Float] = [] { didSet { needsDisplay = true } }
     var progressA: Double = 0 { didSet { needsDisplay = true } }
     var progressB: Double = 0 { didSet { needsDisplay = true } }
+    var faderA: Float = 1.0 { didSet { needsDisplay = true } }
+    var faderB: Float = 1.0 { didSet { needsDisplay = true } }
 
     // MARK: - Init
 
@@ -113,11 +117,13 @@ final class TouchLabView: NSView {
                 case .deckB:
                     if touchesInB >= 2 { onFilter?(.b, deltaY) }
                     else               { onNudge?(.b, deltaX) }
+                case .topStrip:
+                    let deck: AudioEngine.DeckID = newPos.x < 0.5 ? .a : .b
+                    onVolume?(deck, deltaY)
                 case .bottomStrip:
                     crossfader = crossfader.nudged(by: deltaX)
                     needsDisplay = true
                     onCrossfaderChanged?(crossfader)
-                default: break
                 }
             }
 
@@ -164,6 +170,7 @@ final class TouchLabView: NSView {
         drawBackground()
         drawZones()
         drawWaveforms()
+        drawFaders()
         drawCrossfaderIndicator()
         drawTouches()
         drawHUD()
@@ -331,6 +338,44 @@ final class TouchLabView: NSView {
         let hintStr = NSAttributedString(string: hint, attributes: hintAttrs)
         let hintX = (bounds.width - hintStr.size().width) / 2
         hintStr.draw(at: NSPoint(x: hintX, y: 8))
+    }
+
+    private func drawFaders() {
+        guard let strip = ZoneLayout.all.first(where: { $0.name == .topStrip }) else { return }
+        let rect = viewRect(from: strip.rect)
+        let midX = rect.midX
+
+        // Deck A fader — left half
+        let aRect = NSRect(x: rect.minX + 4, y: rect.minY + 4,
+                           width: rect.width / 2 - 8, height: rect.height - 8)
+        drawFaderBar(in: aRect, level: CGFloat(faderA), color: zoneColor(for: .deckA), label: "VOL A")
+
+        // Deck B fader — right half
+        let bRect = NSRect(x: midX + 4, y: rect.minY + 4,
+                           width: rect.width / 2 - 8, height: rect.height - 8)
+        drawFaderBar(in: bRect, level: CGFloat(faderB), color: zoneColor(for: .deckB), label: "VOL B")
+    }
+
+    private func drawFaderBar(in rect: NSRect, level: CGFloat, color: NSColor, label: String) {
+        // Track background
+        color.withAlphaComponent(0.1).setFill()
+        NSBezierPath(rect: rect).fill()
+
+        // Filled level bar
+        let fillH = rect.height * level
+        let fillRect = NSRect(x: rect.minX, y: rect.minY, width: rect.width, height: fillH)
+        color.withAlphaComponent(0.5).setFill()
+        NSBezierPath(rect: fillRect).fill()
+
+        // Label + value
+        let text = String(format: "%@ %.0f%%", label, level * 100)
+        let attrs: [NSAttributedString.Key: Any] = [
+            .foregroundColor: color.withAlphaComponent(0.8),
+            .font: NSFont.monospacedSystemFont(ofSize: 9, weight: .regular),
+        ]
+        let str = NSAttributedString(string: text, attributes: attrs)
+        let pt = NSPoint(x: rect.minX + 3, y: rect.midY - str.size().height / 2)
+        str.draw(at: pt)
     }
 
     private func drawCrossfaderIndicator() {

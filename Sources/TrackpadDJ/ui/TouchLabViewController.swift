@@ -26,6 +26,8 @@ final class TouchLabViewController: NSViewController {
     private func refreshPlayheads() {
         touchLabView.progressA = audioEngine.deckA.playbackProgress
         touchLabView.progressB = audioEngine.deckB.playbackProgress
+        touchLabView.faderA = audioEngine.faderA
+        touchLabView.faderB = audioEngine.faderB
     }
 
     override func viewDidAppear() {
@@ -62,6 +64,10 @@ final class TouchLabViewController: NSViewController {
 
         touchLabView.onFilter = { [weak self] deckID, deltaY in
             self?.audioEngine.setFilter(deck: deckID, deltaY: deltaY)
+        }
+
+        touchLabView.onVolume = { [weak self] deckID, deltaY in
+            self?.audioEngine.setFader(deck: deckID, deltaY: deltaY)
         }
     }
 
