@@ -23,12 +23,13 @@ final class AudioEngine {
     // MARK: - Setup
 
     private func setup() {
-        engine.attach(_deckA.player)
-        engine.attach(_deckB.player)
+        // Attach stable mixer nodes — these persist across file loads.
+        engine.attach(_deckA.mixerNode)
+        engine.attach(_deckB.mixerNode)
 
         let main = engine.mainMixerNode
-        engine.connect(_deckA.player, to: main, format: nil)
-        engine.connect(_deckB.player, to: main, format: nil)
+        engine.connect(_deckA.mixerNode, to: main, format: nil)
+        engine.connect(_deckB.mixerNode, to: main, format: nil)
 
         do {
             try engine.start()
@@ -49,11 +50,18 @@ final class AudioEngine {
 
     func loadTrack(url: URL, deck: DeckID) throws {
         let d = deck == .a ? _deckA : _deckB
+
+        // Detach old sourceNode before creating a new one.
+        if let old = d.sourceNode {
+            engine.detach(old)
+        }
+
         try d.load(url: url)
-        // Reconnect with the file's actual processing format.
-        if let format = d.processingFormat {
-            engine.disconnectNodeOutput(d.player)
-            engine.connect(d.player, to: engine.mainMixerNode, format: format)
+
+        // Attach new sourceNode and wire it into the stable mixerNode.
+        if let src = d.sourceNode, let format = d.processingFormat {
+            engine.attach(src)
+            engine.connect(src, to: d.mixerNode, format: format)
         }
     }
 

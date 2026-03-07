@@ -15,6 +15,9 @@ final class TouchLabView: NSView {
     var onLoadDeck: ((AudioEngine.DeckID) -> Void)?
     var onTogglePlay: ((AudioEngine.DeckID) -> Void)?
     var onCue: ((AudioEngine.DeckID) -> Void)?
+    /// deltaX: normalized horizontal movement per event (positive = right)
+    var onNudge: ((AudioEngine.DeckID, Float) -> Void)?
+    var onNudgeEnd: ((AudioEngine.DeckID) -> Void)?
 
     // MARK: - Deck Status (updated by ViewController)
 
@@ -82,17 +85,31 @@ final class TouchLabView: NSView {
     override func touchesMoved(with event: NSEvent) {
         var updated = session
         for touch in event.touches(matching: .moved, in: self) {
-            let tp = TouchPoint(
-                identity: ObjectIdentifier(touch.identity as AnyObject),
-                position: touch.normalizedPosition,
-                timestamp: event.timestamp
-            )
+            let id = ObjectIdentifier(touch.identity as AnyObject)
+            let newPos = touch.normalizedPosition
+
+            // Compute horizontal delta for jog, using previous stored position.
+            if let prevPos = session.activeTouches[id]?.position,
+               let zone = ZoneLayout.zone(for: newPos) {
+                let deltaX = Float(newPos.x - prevPos.x)
+                switch zone.name {
+                case .deckA: onNudge?(.a, deltaX)
+                case .deckB: onNudge?(.b, deltaX)
+                default: break
+                }
+            }
+
+            let tp = TouchPoint(identity: id, position: newPos, timestamp: event.timestamp)
             updated = updated.updating(tp)
         }
         session = updated
     }
 
     override func touchesEnded(with event: NSEvent) {
+        // Snapshot which deck zones had touches before rebuild.
+        let hadA = session.activeTouches.values.contains { ZoneLayout.zone(for: $0.position)?.name == .deckA }
+        let hadB = session.activeTouches.values.contains { ZoneLayout.zone(for: $0.position)?.name == .deckB }
+
         // Rebuild from still-active touches to avoid ObjectIdentifier
         // mismatches from existential re-boxing across events.
         var remaining: [ObjectIdentifier: TouchPoint] = [:]
@@ -105,10 +122,18 @@ final class TouchLabView: NSView {
             )
         }
         session = TouchSession(activeTouches: remaining)
+
+        // Reset nudge for decks that lost all their touches.
+        let hasA = session.activeTouches.values.contains { ZoneLayout.zone(for: $0.position)?.name == .deckA }
+        let hasB = session.activeTouches.values.contains { ZoneLayout.zone(for: $0.position)?.name == .deckB }
+        if hadA && !hasA { onNudgeEnd?(.a) }
+        if hadB && !hasB { onNudgeEnd?(.b) }
     }
 
     override func touchesCancelled(with event: NSEvent) {
         session = .empty
+        onNudgeEnd?(.a)
+        onNudgeEnd?(.b)
     }
 
     // MARK: - Drawing
