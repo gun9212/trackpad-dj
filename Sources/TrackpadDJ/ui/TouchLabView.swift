@@ -7,6 +7,8 @@ final class TouchLabView: NSView {
         didSet { needsDisplay = true }
     }
 
+    private var crossfader = CrossfaderState.center
+
     // MARK: - Init
 
     override init(frame frameRect: NSRect) {
@@ -23,6 +25,24 @@ final class TouchLabView: NSView {
     }
 
     override var acceptsFirstResponder: Bool { true }
+
+    // MARK: - Keyboard Events
+
+    override func keyDown(with event: NSEvent) {
+        let cmd = event.modifierFlags.contains(.command)
+        switch event.keyCode {
+        case 123: // ←
+            crossfader = cmd ? crossfader.snapped(to: .deckA)
+                             : crossfader.nudged(by: -CrossfaderState.step)
+            needsDisplay = true
+        case 124: // →
+            crossfader = cmd ? crossfader.snapped(to: .deckB)
+                             : crossfader.nudged(by: +CrossfaderState.step)
+            needsDisplay = true
+        default:
+            super.keyDown(with: event)
+        }
+    }
 
     // MARK: - Touch Events
 
@@ -53,12 +73,18 @@ final class TouchLabView: NSView {
     }
 
     override func touchesEnded(with event: NSEvent) {
-        var updated = session
-        for touch in event.touches(matching: .ended, in: self) {
+        // Rebuild from still-active touches to avoid ObjectIdentifier
+        // mismatches from existential re-boxing across events.
+        var remaining: [ObjectIdentifier: TouchPoint] = [:]
+        for touch in event.touches(matching: .touching, in: self) {
             let id = ObjectIdentifier(touch.identity as AnyObject)
-            updated = updated.removing(identity: id)
+            remaining[id] = TouchPoint(
+                identity: id,
+                position: touch.normalizedPosition,
+                timestamp: event.timestamp
+            )
         }
-        session = updated
+        session = TouchSession(activeTouches: remaining)
     }
 
     override func touchesCancelled(with event: NSEvent) {
@@ -70,6 +96,7 @@ final class TouchLabView: NSView {
     override func draw(_ dirtyRect: NSRect) {
         drawBackground()
         drawZones()
+        drawCrossfaderIndicator()
         drawTouches()
         drawHUD()
     }
@@ -150,6 +177,29 @@ final class TouchLabView: NSView {
         let rightStr = NSAttributedString(string: right, attributes: attrs)
         let rightX = bounds.width - rightStr.size().width - 8
         rightStr.draw(at: NSPoint(x: rightX, y: bounds.height - 18))
+    }
+
+    private func drawCrossfaderIndicator() {
+        guard let stripZone = ZoneLayout.all.first(where: { $0.name == .bottomStrip }) else { return }
+        let stripRect = viewRect(from: stripZone.rect)
+        let xPos = stripRect.minX + CGFloat(crossfader.value) * stripRect.width
+
+        // White vertical line at current crossfader position
+        let line = NSBezierPath()
+        line.move(to: NSPoint(x: xPos, y: stripRect.minY + 4))
+        line.line(to: NSPoint(x: xPos, y: stripRect.maxY - 4))
+        line.lineWidth = 2.0
+        NSColor.white.withAlphaComponent(0.85).setStroke()
+        line.stroke()
+
+        // Value readout
+        let label = String(format: "XF: %.2f", crossfader.value)
+        let attrs: [NSAttributedString.Key: Any] = [
+            .foregroundColor: NSColor.white.withAlphaComponent(0.6),
+            .font: NSFont.monospacedSystemFont(ofSize: 9, weight: .regular),
+        ]
+        NSAttributedString(string: label, attributes: attrs)
+            .draw(at: NSPoint(x: stripRect.minX + 6, y: stripRect.minY + 4))
     }
 
     // MARK: - Coordinate Conversion
