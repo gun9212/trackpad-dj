@@ -36,6 +36,10 @@ final class TouchLabView: NSView {
     var onScratch: ((AudioEngine.DeckID, Double) -> Void)?
     /// Called when all fingers lift from a deck zone.
     var onScratchEnd: ((AudioEngine.DeckID) -> Void)?
+    /// Shift+1~4 / Shift+7~0: 현재 위치를 핫큐 슬롯에 저장.
+    var onSetHotCue: ((AudioEngine.DeckID, Int) -> Void)?
+    /// 1~4 / 7~0: 해당 슬롯으로 즉시 점프.
+    var onJumpToHotCue: ((AudioEngine.DeckID, Int) -> Void)?
 
     // MARK: - Deck Status (updated by ViewController)
 
@@ -50,6 +54,8 @@ final class TouchLabView: NSView {
     var progressB: Double = 0 { didSet { needsDisplay = true } }
     var extendedProgressA: Double = 0 { didSet { needsDisplay = true } }
     var extendedProgressB: Double = 0 { didSet { needsDisplay = true } }
+    var hotCuesA: [Double?] = Array(repeating: nil, count: 4) { didSet { needsDisplay = true } }
+    var hotCuesB: [Double?] = Array(repeating: nil, count: 4) { didSet { needsDisplay = true } }
     var durationA: Double = 0 { didSet { needsDisplay = true } }
     var durationB: Double = 0 { didSet { needsDisplay = true } }
     var faderA: Float = 1.0 { didSet { needsDisplay = true } }
@@ -58,6 +64,14 @@ final class TouchLabView: NSView {
     // Accumulated filter level [0, 1]. 1.0 = fully open (default).
     private var filterLevelA: Float = 1.0
     private var filterLevelB: Float = 1.0
+
+    // BPM tap state — purely local, no audio-side dependency.
+    private var tapTimesA: [TimeInterval] = []
+    private var tapTimesB: [TimeInterval] = []
+    private var bpmA: Double = 0
+    private var bpmB: Double = 0
+    private var beatOffsetA: Double = 0  // extendedProgress at first tap of current sequence
+    private var beatOffsetB: Double = 0
 
     // Scratch state — tracked locally for visual feedback.
     private var scratchRateA: Double = 0
@@ -122,6 +136,24 @@ final class TouchLabView: NSView {
         case 125: nudgeKeyA = -1  // down arrow
         case 34:  nudgeKeyB = +1  // I
         case 40:  nudgeKeyB = -1  // K
+        // BPM tap — B = deck A, N = deck B.
+        case 11: if !event.isARepeat { handleBpmTap(deck: .a) }  // B
+        case 45: if !event.isARepeat { handleBpmTap(deck: .b) }  // N
+        // Hot cues — deck A: 1/2/3/4, deck B: 7/8/9/0. Shift = set, no modifier = jump.
+        case 18, 19, 20, 21:  // 1, 2, 3, 4
+            if !event.isARepeat {
+                let idx = Int(event.keyCode) - 18
+                if event.modifierFlags.contains(.shift) { onSetHotCue?(.a, idx) }
+                else { onJumpToHotCue?(.a, idx) }
+            }
+        case 26, 28, 25, 29:  // 7, 8, 9, 0
+            if !event.isARepeat {
+                let bMap: [UInt16: Int] = [26: 0, 28: 1, 25: 2, 29: 3]
+                if let idx = bMap[event.keyCode] {
+                    if event.modifierFlags.contains(.shift) { onSetHotCue?(.b, idx) }
+                    else { onJumpToHotCue?(.b, idx) }
+                }
+            }
         default:
             super.keyDown(with: event)
         }
@@ -137,6 +169,36 @@ final class TouchLabView: NSView {
         case 34, 40:   nudgeKeyB = 0
         default: super.keyUp(with: event)
         }
+    }
+
+    // MARK: - BPM Tap
+
+    private func handleBpmTap(deck: AudioEngine.DeckID) {
+        let now = CACurrentMediaTime()
+        var taps = deck == .a ? tapTimesA : tapTimesB
+
+        // 2초 이상 간격이면 새 시퀀스 시작.
+        if let last = taps.last, now - last > 2.0 { taps = [] }
+
+        // 첫 탭에서 비트 기준점 기록.
+        if taps.isEmpty {
+            if deck == .a { beatOffsetA = extendedProgressA }
+            else          { beatOffsetB = extendedProgressB }
+        }
+
+        taps.append(now)
+        if taps.count > 8 { taps = Array(taps.suffix(8)) }
+
+        if taps.count >= 2 {
+            // 전체 구간 나누기: 첫 탭~마지막 탭 / (n-1) 간격
+            // 간격 평균보다 누적 오차가 훨씬 적음.
+            let span = taps.last! - taps.first!
+            let bpm = min(200, max(60, 60.0 * Double(taps.count - 1) / span))
+            if deck == .a { bpmA = bpm } else { bpmB = bpm }
+        }
+
+        if deck == .a { tapTimesA = taps } else { tapTimesB = taps }
+        needsDisplay = true
     }
 
     // MARK: - Key Hold Timer
@@ -334,19 +396,22 @@ final class TouchLabView: NSView {
 
     private func drawWaveforms() {
         if let zone = ZoneLayout.all.first(where: { $0.name == .deckA }) {
-            drawWaveform(waveformA, progress: extendedProgressA,
+            drawWaveform(waveformA, progress: extendedProgressA, hotCues: hotCuesA,
+                         bpm: bpmA, beatOffset: beatOffsetA, duration: durationA,
                          scratchRate: scratchRateA, isScratchActive: isScratchActiveA,
                          in: viewRect(from: zone.rect), color: zoneColor(for: .deckA))
         }
         if let zone = ZoneLayout.all.first(where: { $0.name == .deckB }) {
-            drawWaveform(waveformB, progress: extendedProgressB,
+            drawWaveform(waveformB, progress: extendedProgressB, hotCues: hotCuesB,
+                         bpm: bpmB, beatOffset: beatOffsetB, duration: durationB,
                          scratchRate: scratchRateB, isScratchActive: isScratchActiveB,
                          in: viewRect(from: zone.rect), color: zoneColor(for: .deckB))
         }
     }
 
     /// Scrolling waveform: playhead fixed at center, waveform scrolls with playback.
-    private func drawWaveform(_ samples: [Float], progress: Double,
+    private func drawWaveform(_ samples: [Float], progress: Double, hotCues: [Double?],
+                               bpm: Double, beatOffset: Double, duration: Double,
                                scratchRate: Double, isScratchActive: Bool,
                                in rect: NSRect, color: NSColor) {
         guard samples.count > 1 else { return }
@@ -421,6 +486,52 @@ final class TouchLabView: NSView {
             drawScratchArrow(rate: scratchRate,
                              at: NSPoint(x: waveRect.midX, y: waveRect.minY + 10),
                              color: color)
+        }
+
+        // Beat grid: white tick marks at BPM intervals.
+        if bpm > 0 && duration > 0 {
+            let beatIntervalSamples = 60.0 * Double(samples.count) / (bpm * duration)
+            let beatOffsetSample = beatOffset * Double(samples.count)
+            let firstN = Int(floor((Double(center - visibleHalf) - beatOffsetSample) / beatIntervalSamples))
+            var beatPos = beatOffsetSample + Double(firstN) * beatIntervalSamples
+            while beatPos <= Double(center + visibleHalf) {
+                let offset = Int(beatPos.rounded()) - center
+                if offset >= -visibleHalf && offset <= visibleHalf {
+                    let x = xFor(offset: offset + visibleHalf)
+                    let tick = NSBezierPath()
+                    tick.move(to: NSPoint(x: x, y: waveRect.minY + 2))
+                    tick.line(to: NSPoint(x: x, y: waveRect.minY + 10))
+                    tick.lineWidth = 1.0
+                    NSColor.white.withAlphaComponent(0.45).setStroke()
+                    tick.stroke()
+                }
+                beatPos += beatIntervalSamples
+            }
+            let bpmStr = String(format: "%.1f BPM", bpm) as NSString
+            bpmStr.draw(at: NSPoint(x: waveRect.minX + 4, y: waveRect.minY + 4),
+                        withAttributes: [.foregroundColor: NSColor.white.withAlphaComponent(0.65),
+                                         .font: NSFont.systemFont(ofSize: 10)])
+        }
+
+        // Hot cue markers: colored vertical lines on the waveform.
+        let cueColors: [NSColor] = [.systemOrange, .systemCyan, .systemGreen, .systemPurple]
+        for (i, cueProgress) in hotCues.enumerated() {
+            guard let cue = cueProgress else { continue }
+            let cueIdx = Int(cue * Double(samples.count))
+            let offset = cueIdx - center
+            guard offset >= -visibleHalf && offset <= visibleHalf else { continue }
+            let x = xFor(offset: offset + visibleHalf)
+            let cuePath = NSBezierPath()
+            cuePath.move(to: NSPoint(x: x, y: waveRect.minY))
+            cuePath.line(to: NSPoint(x: x, y: waveRect.maxY))
+            cuePath.lineWidth = 1.5
+            cueColors[i].withAlphaComponent(0.9).setStroke()
+            cuePath.stroke()
+            // 번호 레이블
+            let label = "\(i + 1)" as NSString
+            label.draw(at: NSPoint(x: x + 2, y: waveRect.maxY - 14),
+                       withAttributes: [.foregroundColor: cueColors[i],
+                                        .font: NSFont.systemFont(ofSize: 10, weight: .bold)])
         }
     }
 
