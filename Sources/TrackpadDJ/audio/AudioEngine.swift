@@ -122,6 +122,23 @@ final class AudioEngine {
         }
     }
 
+    // MARK: - Scratch
+
+    /// Called on each touchesMoved in a deck zone (1-finger).
+    /// rate: 0 = freeze, 1.0 = normal speed, negative = reverse.
+    func setScratch(deck: DeckID, rate: Double) {
+        let d = deck == .a ? _deckA : _deckB
+        d.scratchRate = rate
+        d.isScratchActive = true
+    }
+
+    /// Called when the finger lifts from a deck zone.
+    func endScratch(deck: DeckID) {
+        let d = deck == .a ? _deckA : _deckB
+        d.isScratchActive = false
+        d.scratchRate = 1.0
+    }
+
     // MARK: - Filter
 
     /// Adjust lowpass cutoff via 2-finger vertical gesture.

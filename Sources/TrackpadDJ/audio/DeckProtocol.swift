@@ -34,4 +34,7 @@ protocol DeckProtocol: AnyObject {
 
     /// Playback position normalized to [0, 1].
     var playbackProgress: Double { get }
+
+    /// Total track duration in seconds. 0 if no track loaded.
+    var duration: Double { get }
 }

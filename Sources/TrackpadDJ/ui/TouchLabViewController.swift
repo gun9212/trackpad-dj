@@ -26,6 +26,8 @@ final class TouchLabViewController: NSViewController {
     private func refreshPlayheads() {
         touchLabView.progressA = audioEngine.deckA.playbackProgress
         touchLabView.progressB = audioEngine.deckB.playbackProgress
+        touchLabView.durationA  = audioEngine.deckA.duration
+        touchLabView.durationB  = audioEngine.deckB.duration
         touchLabView.faderA = audioEngine.faderA
         touchLabView.faderB = audioEngine.faderB
     }
@@ -61,6 +63,14 @@ final class TouchLabViewController: NSViewController {
         }
 
         touchLabView.onNudgeEnd = { _ in }  // no-op: seek-based scrub needs no reset
+
+        touchLabView.onScratch = { [weak self] deckID, rate in
+            self?.audioEngine.setScratch(deck: deckID, rate: rate)
+        }
+
+        touchLabView.onScratchEnd = { [weak self] deckID in
+            self?.audioEngine.endScratch(deck: deckID)
+        }
 
         touchLabView.onFilter = { [weak self] deckID, deltaY in
             self?.audioEngine.setFilter(deck: deckID, deltaY: deltaY)

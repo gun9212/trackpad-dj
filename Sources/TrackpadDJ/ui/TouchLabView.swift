@@ -32,6 +32,10 @@ final class TouchLabView: NSView {
     var onFilter: ((AudioEngine.DeckID, Float) -> Void)?
     /// deltaY: normalized vertical movement per event (positive = up = louder)
     var onVolume: ((AudioEngine.DeckID, Float) -> Void)?
+    /// rate: playback rate (1.0 = normal, negative = reverse, 0 = freeze). Called on 1-finger touch in deck zone.
+    var onScratch: ((AudioEngine.DeckID, Double) -> Void)?
+    /// Called when all fingers lift from a deck zone.
+    var onScratchEnd: ((AudioEngine.DeckID) -> Void)?
 
     // MARK: - Deck Status (updated by ViewController)
 
@@ -44,8 +48,14 @@ final class TouchLabView: NSView {
     var waveformB: [Float] = [] { didSet { needsDisplay = true } }
     var progressA: Double = 0 { didSet { needsDisplay = true } }
     var progressB: Double = 0 { didSet { needsDisplay = true } }
+    var durationA: Double = 0 { didSet { needsDisplay = true } }
+    var durationB: Double = 0 { didSet { needsDisplay = true } }
     var faderA: Float = 1.0 { didSet { needsDisplay = true } }
     var faderB: Float = 1.0 { didSet { needsDisplay = true } }
+
+    // Accumulated filter level [0, 1]. 1.0 = fully open (default).
+    private var filterLevelA: Float = 1.0
+    private var filterLevelB: Float = 1.0
 
     // MARK: - Init
 
@@ -130,12 +140,18 @@ final class TouchLabView: NSView {
     }
 
     private func applyHeldKeys() {
-        if volumeKeyA != 0 { onVolume?(.a, volumeKeyA * 0.008) }  // full range ~2 s
+        if volumeKeyA != 0 { onVolume?(.a, volumeKeyA * 0.008) }
         if volumeKeyB != 0 { onVolume?(.b, volumeKeyB * 0.008) }
-        if filterKeyA != 0 { onFilter?(.a, filterKeyA * 0.003) }  // full sweep ~5 s
-        if filterKeyB != 0 { onFilter?(.b, filterKeyB * 0.003) }
-        if nudgeKeyA  != 0 { onNudge?(.a, nudgeKeyA  * 0.001) }   // ~1 s of track per s held
-        if nudgeKeyB  != 0 { onNudge?(.b, nudgeKeyB  * 0.001) }
+        if filterKeyA != 0 {
+            filterLevelA = max(0, min(1, filterLevelA + filterKeyA * 0.003))
+            onFilter?(.a, filterKeyA * 0.003)
+        }
+        if filterKeyB != 0 {
+            filterLevelB = max(0, min(1, filterLevelB + filterKeyB * 0.003))
+            onFilter?(.b, filterKeyB * 0.003)
+        }
+        if nudgeKeyA != 0 { onNudge?(.a, nudgeKeyA * 0.001) }
+        if nudgeKeyB != 0 { onNudge?(.b, nudgeKeyB * 0.001) }
     }
 
     // MARK: - Touch Events
@@ -143,11 +159,25 @@ final class TouchLabView: NSView {
     override func touchesBegan(with event: NSEvent) {
         var updated = session
         for touch in event.touches(matching: .began, in: self) {
+            let pos = touch.normalizedPosition
             let tp = TouchPoint(
                 identity: ObjectIdentifier(touch.identity as AnyObject),
-                position: touch.normalizedPosition,
+                position: pos,
                 timestamp: event.timestamp
             )
+            // Freeze deck on first contact — like putting a hand on a record.
+            if let zone = ZoneLayout.zone(for: pos) {
+                let isFirstInZone = !session.activeTouches.values.contains {
+                    ZoneLayout.zone(for: $0.position)?.name == zone.name
+                }
+                if isFirstInZone {
+                    switch zone.name {
+                    case .deckA: onScratch?(.a, 0)
+                    case .deckB: onScratch?(.b, 0)
+                    default: break
+                    }
+                }
+            }
             updated = updated.adding(tp)
         }
         session = updated
@@ -170,11 +200,20 @@ final class TouchLabView: NSView {
                 let deltaY = Float(newPos.y - prevPos.y)
                 switch zone.name {
                 case .deckA:
-                    if touchesInA >= 2 { onFilter?(.a, deltaY) }
-                    else               { onNudge?(.a, deltaX) }
+                    if touchesInA >= 2 {
+                        filterLevelA = max(0, min(1, filterLevelA + deltaY))
+                        onFilter?(.a, deltaY)
+                    } else {
+                        // 1-finger: scratch (rate proportional to finger velocity)
+                        onScratch?(.a, Double(deltaX) * 80.0)
+                    }
                 case .deckB:
-                    if touchesInB >= 2 { onFilter?(.b, deltaY) }
-                    else               { onNudge?(.b, deltaX) }
+                    if touchesInB >= 2 {
+                        filterLevelB = max(0, min(1, filterLevelB + deltaY))
+                        onFilter?(.b, deltaY)
+                    } else {
+                        onScratch?(.b, Double(deltaX) * 80.0)
+                    }
                 case .topStrip:
                     let deck: AudioEngine.DeckID = newPos.x < 0.5 ? .a : .b
                     onVolume?(deck, deltaY)
@@ -209,17 +248,17 @@ final class TouchLabView: NSView {
         }
         session = TouchSession(activeTouches: remaining)
 
-        // Reset nudge for decks that lost all their touches.
+        // Reset nudge/scratch for decks that lost all their touches.
         let hasA = session.activeTouches.values.contains { ZoneLayout.zone(for: $0.position)?.name == .deckA }
         let hasB = session.activeTouches.values.contains { ZoneLayout.zone(for: $0.position)?.name == .deckB }
-        if hadA && !hasA { onNudgeEnd?(.a) }
-        if hadB && !hasB { onNudgeEnd?(.b) }
+        if hadA && !hasA { onNudgeEnd?(.a); onScratchEnd?(.a) }
+        if hadB && !hasB { onNudgeEnd?(.b); onScratchEnd?(.b) }
     }
 
     override func touchesCancelled(with event: NSEvent) {
         session = .empty
-        onNudgeEnd?(.a)
-        onNudgeEnd?(.b)
+        onNudgeEnd?(.a); onNudgeEnd?(.b)
+        onScratchEnd?(.a); onScratchEnd?(.b)
     }
 
     // MARK: - Drawing
@@ -228,6 +267,8 @@ final class TouchLabView: NSView {
         drawBackground()
         drawZones()
         drawWaveforms()
+        drawDeckHeaders()
+        drawFilterIndicators()
         drawFaders()
         drawCrossfaderIndicator()
         drawTouches()
@@ -339,20 +380,8 @@ final class TouchLabView: NSView {
             let center = viewPoint(from: touch.position)
             let zone = ZoneLayout.zone(for: touch.position)
             let color: NSColor = zone.map { zoneColor(for: $0.name) } ?? .white
-
-            // Halo
             drawCircle(center: center, radius: 26, fill: color.withAlphaComponent(0.2), stroke: nil)
-            // Dot
             drawCircle(center: center, radius: 6, fill: color, stroke: nil)
-
-            // Coordinate readout
-            let label = String(format: "%.2f, %.2f", touch.position.x, touch.position.y)
-            let attrs: [NSAttributedString.Key: Any] = [
-                .foregroundColor: NSColor.white.withAlphaComponent(0.65),
-                .font: NSFont.monospacedSystemFont(ofSize: 9, weight: .regular),
-            ]
-            NSAttributedString(string: label, attributes: attrs)
-                .draw(at: NSPoint(x: center.x + 30, y: center.y - 5))
         }
     }
 
@@ -365,29 +394,7 @@ final class TouchLabView: NSView {
     }
 
     private func drawHUD() {
-        let attrs: [NSAttributedString.Key: Any] = [
-            .foregroundColor: NSColor.white.withAlphaComponent(0.35),
-            .font: NSFont.monospacedSystemFont(ofSize: 10, weight: .regular),
-        ]
-        let top = bounds.height - 18
-        NSAttributedString(string: "Touch Lab", attributes: attrs)
-            .draw(at: NSPoint(x: 8, y: top))
-
-        let fingerStr = NSAttributedString(string: "fingers: \(session.count)", attributes: attrs)
-        let fingerX = bounds.width - fingerStr.size().width - 8
-        fingerStr.draw(at: NSPoint(x: fingerX, y: top))
-
-        // Deck status (bottom-left)
-        let deckAttrs: [NSAttributedString.Key: Any] = [
-            .foregroundColor: NSColor.white.withAlphaComponent(0.55),
-            .font: NSFont.monospacedSystemFont(ofSize: 10, weight: .regular),
-        ]
-        NSAttributedString(string: deckALabel, attributes: deckAttrs).draw(at: NSPoint(x: 8, y: 8))
-        let bStr = NSAttributedString(string: deckBLabel, attributes: deckAttrs)
-        let bX = bounds.width - bStr.size().width - 8
-        bStr.draw(at: NSPoint(x: bX, y: 8))
-
-        // Key hint (center bottom)
+        // Key hint at bottom center
         let hint = "Q/W:load  A/S:play  Z/X:cue  E·D/R·F:vol  T·G/Y·H:filter  ↑·↓/I·K:nudge  ←/→:xfade"
         let hintAttrs: [NSAttributedString.Key: Any] = [
             .foregroundColor: NSColor.white.withAlphaComponent(0.2),
@@ -439,24 +446,123 @@ final class TouchLabView: NSView {
     private func drawCrossfaderIndicator() {
         guard let stripZone = ZoneLayout.all.first(where: { $0.name == .bottomStrip }) else { return }
         let stripRect = viewRect(from: stripZone.rect)
+        let color = zoneColor(for: .bottomStrip)
+
+        // A / A+B / B mode labels — highlight active mode
+        let modeLabels = ["A", "A+B", "B"]
+        let segW = stripRect.width / 3
+        for (i, label) in modeLabels.enumerated() {
+            let segRect = NSRect(x: stripRect.minX + CGFloat(i) * segW,
+                                 y: stripRect.minY, width: segW, height: stripRect.height)
+            let isActive = i == crossfaderMode
+            if isActive {
+                color.withAlphaComponent(0.25).setFill()
+                NSBezierPath(rect: segRect).fill()
+            }
+            let alpha: CGFloat = isActive ? 0.95 : 0.35
+            let attrs: [NSAttributedString.Key: Any] = [
+                .foregroundColor: color.withAlphaComponent(alpha),
+                .font: NSFont.monospacedSystemFont(ofSize: isActive ? 12 : 10,
+                                                    weight: isActive ? .bold : .regular),
+            ]
+            let str = NSAttributedString(string: label, attributes: attrs)
+            let pt = NSPoint(x: segRect.midX - str.size().width / 2,
+                             y: segRect.midY - str.size().height / 2)
+            str.draw(at: pt)
+        }
+
+        // Playhead line at exact crossfader position
         let xPos = stripRect.minX + CGFloat(crossfader.value) * stripRect.width
-
-        // White vertical line at current crossfader position
         let line = NSBezierPath()
-        line.move(to: NSPoint(x: xPos, y: stripRect.minY + 4))
-        line.line(to: NSPoint(x: xPos, y: stripRect.maxY - 4))
+        line.move(to: NSPoint(x: xPos, y: stripRect.minY + 2))
+        line.line(to: NSPoint(x: xPos, y: stripRect.maxY - 2))
         line.lineWidth = 2.0
-        NSColor.white.withAlphaComponent(0.85).setStroke()
+        NSColor.white.withAlphaComponent(0.7).setStroke()
         line.stroke()
+    }
 
-        // Value readout
-        let label = String(format: "XF: %.2f", crossfader.value)
-        let attrs: [NSAttributedString.Key: Any] = [
-            .foregroundColor: NSColor.white.withAlphaComponent(0.6),
-            .font: NSFont.monospacedSystemFont(ofSize: 9, weight: .regular),
+    // MARK: - Deck Headers
+
+    private func drawDeckHeaders() {
+        if let zone = ZoneLayout.all.first(where: { $0.name == .deckA }) {
+            drawDeckHeader(label: deckALabel, progress: progressA, duration: durationA,
+                           in: viewRect(from: zone.rect), color: zoneColor(for: .deckA))
+        }
+        if let zone = ZoneLayout.all.first(where: { $0.name == .deckB }) {
+            drawDeckHeader(label: deckBLabel, progress: progressB, duration: durationB,
+                           in: viewRect(from: zone.rect), color: zoneColor(for: .deckB))
+        }
+    }
+
+    private func drawDeckHeader(label: String, progress: Double, duration: Double,
+                                 in rect: NSRect, color: NSColor) {
+        let headerH: CGFloat = 20
+        let headerRect = NSRect(x: rect.minX, y: rect.maxY - headerH,
+                                width: rect.width, height: headerH)
+
+        // Track name + play state (left side)
+        let nameAttrs: [NSAttributedString.Key: Any] = [
+            .foregroundColor: color.withAlphaComponent(0.9),
+            .font: NSFont.monospacedSystemFont(ofSize: 11, weight: .medium),
         ]
-        NSAttributedString(string: label, attributes: attrs)
-            .draw(at: NSPoint(x: stripRect.minX + 6, y: stripRect.minY + 4))
+        NSAttributedString(string: label, attributes: nameAttrs)
+            .draw(at: NSPoint(x: headerRect.minX + 6, y: headerRect.minY + 3))
+
+        // Time display (right side): elapsed / total
+        guard duration > 0 else { return }
+        let elapsed = progress * duration
+        let remaining = duration - elapsed
+        let timeStr = "-\(formatTime(remaining))  /  \(formatTime(duration))"
+        let timeAttrs: [NSAttributedString.Key: Any] = [
+            .foregroundColor: color.withAlphaComponent(0.6),
+            .font: NSFont.monospacedSystemFont(ofSize: 10, weight: .regular),
+        ]
+        let timeStrAttr = NSAttributedString(string: timeStr, attributes: timeAttrs)
+        let timeX = headerRect.maxX - timeStrAttr.size().width - 6
+        timeStrAttr.draw(at: NSPoint(x: timeX, y: headerRect.minY + 4))
+    }
+
+    private func formatTime(_ seconds: Double) -> String {
+        guard seconds.isFinite, seconds >= 0 else { return "--:--" }
+        let s = Int(seconds)
+        return String(format: "%d:%02d", s / 60, s % 60)
+    }
+
+    // MARK: - Filter Indicators
+
+    private func drawFilterIndicators() {
+        if let zone = ZoneLayout.all.first(where: { $0.name == .deckA }) {
+            drawFilterBar(level: filterLevelA, in: viewRect(from: zone.rect),
+                          color: zoneColor(for: .deckA))
+        }
+        if let zone = ZoneLayout.all.first(where: { $0.name == .deckB }) {
+            drawFilterBar(level: filterLevelB, in: viewRect(from: zone.rect),
+                          color: zoneColor(for: .deckB))
+        }
+    }
+
+    private func drawFilterBar(level: Float, in rect: NSRect, color: NSColor) {
+        let barW: CGFloat = 6
+        let barX = rect.maxX - barW - 3
+        let barRect = NSRect(x: barX, y: rect.minY + 4, width: barW, height: rect.height - 8)
+
+        // Track
+        color.withAlphaComponent(0.1).setFill()
+        NSBezierPath(rect: barRect).fill()
+
+        // Fill
+        let fillH = barRect.height * CGFloat(level)
+        let fillRect = NSRect(x: barRect.minX, y: barRect.minY, width: barW, height: fillH)
+        color.withAlphaComponent(0.5).setFill()
+        NSBezierPath(rect: fillRect).fill()
+
+        // Label
+        let attrs: [NSAttributedString.Key: Any] = [
+            .foregroundColor: color.withAlphaComponent(0.5),
+            .font: NSFont.monospacedSystemFont(ofSize: 7, weight: .regular),
+        ]
+        NSAttributedString(string: "F", attributes: attrs)
+            .draw(at: NSPoint(x: barX + 1, y: barRect.maxY + 2))
     }
 
     // MARK: - Coordinate Conversion

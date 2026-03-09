@@ -45,10 +45,20 @@ final class Deck: DeckProtocol {
         return min(readPosition / Double(buf.frameLength), 1.0)
     }
 
+    var duration: Double {
+        guard let buf = buffer, let fmt = processingFormat else { return 0 }
+        return Double(buf.frameLength) / fmt.sampleRate
+    }
+
     // Accessed from both main thread and audio render thread.
     // Double/Bool reads on 64-bit ARM/x86 are effectively atomic — acceptable for prototype.
     private var buffer: AVAudioPCMBuffer?
     private var readPosition: Double = 0.0
+
+    /// Playback rate for scratch. 1.0 = normal, negative = reverse, 0 = freeze.
+    var scratchRate: Double = 1.0
+    /// True while a finger is on the deck zone — enables render even when isPlaying is false.
+    var isScratchActive: Bool = false
 
     // MARK: - DeckProtocol
 
@@ -71,7 +81,7 @@ final class Deck: DeckProtocol {
         buffer = buf
 
         sourceNode = AVAudioSourceNode(format: format) { [weak self] isSilence, _, frameCount, audioBufferList -> OSStatus in
-            guard let self, self.isPlaying, let buf = self.buffer else {
+            guard let self, (self.isPlaying || self.isScratchActive), let buf = self.buffer else {
                 isSilence.pointee = true
                 return noErr
             }
@@ -154,7 +164,9 @@ final class Deck: DeckProtocol {
                 abl[ch].mData?.assumingMemoryBound(to: Float.self)[frame] = s
             }
 
-            readPosition += 1.0
+            let advance = isScratchActive ? scratchRate : 1.0
+            readPosition += advance
+            if readPosition < 0 { readPosition = 0 }
         }
     }
 }
