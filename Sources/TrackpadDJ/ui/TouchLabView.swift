@@ -198,10 +198,6 @@ final class TouchLabView: NSView {
     override func touchesMoved(with event: NSEvent) {
         var updated = session
 
-        // Count all active touches per deck zone to distinguish 1-finger (jog) from 2-finger (filter).
-        let touchesInA = session.activeTouches.values.filter { ZoneLayout.zone(for: $0.position)?.name == .deckA }.count
-        let touchesInB = session.activeTouches.values.filter { ZoneLayout.zone(for: $0.position)?.name == .deckB }.count
-
         for touch in event.touches(matching: .moved, in: self) {
             let id = ObjectIdentifier(touch.identity as AnyObject)
             let newPos = touch.normalizedPosition
@@ -212,25 +208,20 @@ final class TouchLabView: NSView {
                 let deltaY = Float(newPos.y - prevPos.y)
                 switch zone.name {
                 case .deckA:
-                    if touchesInA >= 2 {
-                        filterLevelA = max(0, min(1, filterLevelA + deltaY))
-                        onFilter?(.a, deltaY)
-                    } else {
-                        let rate = Double(deltaX) * 200.0
-                        scratchRateA = rate
-                        isScratchActiveA = true
-                        onScratch?(.a, rate)
-                    }
+                    // 수직(앞뒤) → 스크래치, 수평(좌우) → 필터. 핑거 수 무관.
+                    let rate = Double(deltaY) * 200.0
+                    scratchRateA = rate
+                    isScratchActiveA = true
+                    onScratch?(.a, rate)
+                    filterLevelA = max(0, min(1, filterLevelA + deltaX))
+                    onFilter?(.a, deltaX)
                 case .deckB:
-                    if touchesInB >= 2 {
-                        filterLevelB = max(0, min(1, filterLevelB + deltaY))
-                        onFilter?(.b, deltaY)
-                    } else {
-                        let rate = Double(deltaX) * 200.0
-                        scratchRateB = rate
-                        isScratchActiveB = true
-                        onScratch?(.b, rate)
-                    }
+                    let rate = Double(deltaY) * 200.0
+                    scratchRateB = rate
+                    isScratchActiveB = true
+                    onScratch?(.b, rate)
+                    filterLevelB = max(0, min(1, filterLevelB + deltaX))
+                    onFilter?(.b, deltaX)
                 case .topStrip:
                     let deck: AudioEngine.DeckID = newPos.x < 0.5 ? .a : .b
                     onVolume?(deck, deltaY)
