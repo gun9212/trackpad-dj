@@ -208,20 +208,26 @@ final class TouchLabView: NSView {
                 let deltaY = Float(newPos.y - prevPos.y)
                 switch zone.name {
                 case .deckA:
-                    // 수직(앞뒤) → 스크래치, 수평(좌우) → 필터. 핑거 수 무관.
-                    let rate = Double(deltaY) * 200.0
-                    scratchRateA = rate
-                    isScratchActiveA = true
-                    onScratch?(.a, rate)
-                    filterLevelA = max(0, min(1, filterLevelA + deltaX))
-                    onFilter?(.a, deltaX)
+                    // 우세 축만 적용 — 대각선 움직임 시 양쪽 동시 발동 방지.
+                    if abs(deltaY) >= abs(deltaX) {
+                        let rate = Double(deltaY) * 200.0
+                        scratchRateA = rate
+                        isScratchActiveA = true
+                        onScratch?(.a, rate)
+                    } else {
+                        filterLevelA = max(0, min(1, filterLevelA + deltaX))
+                        onFilter?(.a, deltaX)
+                    }
                 case .deckB:
-                    let rate = Double(deltaY) * 200.0
-                    scratchRateB = rate
-                    isScratchActiveB = true
-                    onScratch?(.b, rate)
-                    filterLevelB = max(0, min(1, filterLevelB + deltaX))
-                    onFilter?(.b, deltaX)
+                    if abs(deltaY) >= abs(deltaX) {
+                        let rate = Double(deltaY) * 200.0
+                        scratchRateB = rate
+                        isScratchActiveB = true
+                        onScratch?(.b, rate)
+                    } else {
+                        filterLevelB = max(0, min(1, filterLevelB + deltaX))
+                        onFilter?(.b, deltaX)
+                    }
                 case .topStrip:
                     let deck: AudioEngine.DeckID = newPos.x < 0.5 ? .a : .b
                     onVolume?(deck, deltaY)
