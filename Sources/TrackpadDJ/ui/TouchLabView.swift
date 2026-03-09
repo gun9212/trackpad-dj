@@ -57,6 +57,12 @@ final class TouchLabView: NSView {
     private var filterLevelA: Float = 1.0
     private var filterLevelB: Float = 1.0
 
+    // Scratch state — tracked locally for visual feedback.
+    private var scratchRateA: Double = 0
+    private var scratchRateB: Double = 0
+    private var isScratchActiveA: Bool = false
+    private var isScratchActiveB: Bool = false
+
     // MARK: - Init
 
     override init(frame frameRect: NSRect) {
@@ -172,8 +178,12 @@ final class TouchLabView: NSView {
                 }
                 if isFirstInZone {
                     switch zone.name {
-                    case .deckA: onScratch?(.a, 0)
-                    case .deckB: onScratch?(.b, 0)
+                    case .deckA:
+                        isScratchActiveA = true; scratchRateA = 0
+                        onScratch?(.a, 0)
+                    case .deckB:
+                        isScratchActiveB = true; scratchRateB = 0
+                        onScratch?(.b, 0)
                     default: break
                     }
                 }
@@ -204,15 +214,20 @@ final class TouchLabView: NSView {
                         filterLevelA = max(0, min(1, filterLevelA + deltaY))
                         onFilter?(.a, deltaY)
                     } else {
-                        // 1-finger: scratch (rate proportional to finger velocity)
-                        onScratch?(.a, Double(deltaX) * 80.0)
+                        let rate = Double(deltaX) * 25.0
+                        scratchRateA = rate
+                        isScratchActiveA = true
+                        onScratch?(.a, rate)
                     }
                 case .deckB:
                     if touchesInB >= 2 {
                         filterLevelB = max(0, min(1, filterLevelB + deltaY))
                         onFilter?(.b, deltaY)
                     } else {
-                        onScratch?(.b, Double(deltaX) * 80.0)
+                        let rate = Double(deltaX) * 25.0
+                        scratchRateB = rate
+                        isScratchActiveB = true
+                        onScratch?(.b, rate)
                     }
                 case .topStrip:
                     let deck: AudioEngine.DeckID = newPos.x < 0.5 ? .a : .b
@@ -251,12 +266,20 @@ final class TouchLabView: NSView {
         // Reset nudge/scratch for decks that lost all their touches.
         let hasA = session.activeTouches.values.contains { ZoneLayout.zone(for: $0.position)?.name == .deckA }
         let hasB = session.activeTouches.values.contains { ZoneLayout.zone(for: $0.position)?.name == .deckB }
-        if hadA && !hasA { onNudgeEnd?(.a); onScratchEnd?(.a) }
-        if hadB && !hasB { onNudgeEnd?(.b); onScratchEnd?(.b) }
+        if hadA && !hasA {
+            isScratchActiveA = false; scratchRateA = 0
+            onNudgeEnd?(.a); onScratchEnd?(.a)
+        }
+        if hadB && !hasB {
+            isScratchActiveB = false; scratchRateB = 0
+            onNudgeEnd?(.b); onScratchEnd?(.b)
+        }
     }
 
     override func touchesCancelled(with event: NSEvent) {
         session = .empty
+        isScratchActiveA = false; isScratchActiveB = false
+        scratchRateA = 0; scratchRateB = 0
         onNudgeEnd?(.a); onNudgeEnd?(.b)
         onScratchEnd?(.a); onScratchEnd?(.b)
     }
@@ -312,67 +335,106 @@ final class TouchLabView: NSView {
 
     private func drawWaveforms() {
         if let zone = ZoneLayout.all.first(where: { $0.name == .deckA }) {
-            drawWaveform(waveformA, progress: progressA, in: viewRect(from: zone.rect),
-                         color: zoneColor(for: .deckA))
+            drawWaveform(waveformA, progress: progressA,
+                         scratchRate: scratchRateA, isScratchActive: isScratchActiveA,
+                         in: viewRect(from: zone.rect), color: zoneColor(for: .deckA))
         }
         if let zone = ZoneLayout.all.first(where: { $0.name == .deckB }) {
-            drawWaveform(waveformB, progress: progressB, in: viewRect(from: zone.rect),
-                         color: zoneColor(for: .deckB))
+            drawWaveform(waveformB, progress: progressB,
+                         scratchRate: scratchRateB, isScratchActive: isScratchActiveB,
+                         in: viewRect(from: zone.rect), color: zoneColor(for: .deckB))
         }
     }
 
-    private func drawWaveform(_ samples: [Float], progress: Double, in rect: NSRect, color: NSColor) {
+    /// Scrolling waveform: playhead fixed at center, waveform scrolls with playback.
+    private func drawWaveform(_ samples: [Float], progress: Double,
+                               scratchRate: Double, isScratchActive: Bool,
+                               in rect: NSRect, color: NSColor) {
         guard samples.count > 1 else { return }
 
-        let mid = rect.midY
-        let halfH = rect.height * 0.4  // waveform uses 80% of zone height
+        // Leave room for deck header (top 22px) and filter bar (right 15px).
+        let waveRect = NSRect(x: rect.minX, y: rect.minY,
+                              width: rect.width - 15, height: rect.height - 22)
+        let mid = waveRect.midY
+        let halfH = waveRect.height * 0.38
 
-        // Filled waveform shape
-        let path = NSBezierPath()
-        // Top half (forward pass)
-        for (i, amp) in samples.enumerated() {
-            let x = rect.minX + CGFloat(i) / CGFloat(samples.count) * rect.width
-            let y = mid + CGFloat(amp) * halfH
-            if i == 0 { path.move(to: NSPoint(x: x, y: y)) }
-            else       { path.line(to: NSPoint(x: x, y: y)) }
+        // Subtle background highlight when scratch is active.
+        if isScratchActive {
+            color.withAlphaComponent(0.07).setFill()
+            NSBezierPath(rect: waveRect).fill()
         }
-        // Bottom half (reverse pass)
-        for i in stride(from: samples.count - 1, through: 0, by: -1) {
-            let x = rect.minX + CGFloat(i) / CGFloat(samples.count) * rect.width
-            let y = mid - CGFloat(samples[i]) * halfH
-            path.line(to: NSPoint(x: x, y: y))
-        }
-        path.close()
-        color.withAlphaComponent(0.25).setFill()
-        path.fill()
 
-        // Played region overlay (brighter)
-        let playedWidth = rect.width * CGFloat(progress)
+        let visibleHalf = 50           // samples visible on each side of center
+        let total = visibleHalf * 2
+        let center = Int(progress * Double(samples.count))
+
+        func amp(at idx: Int) -> CGFloat {
+            guard idx >= 0 && idx < samples.count else { return 0 }
+            return CGFloat(samples[idx])
+        }
+        func xFor(offset: Int) -> CGFloat {
+            waveRect.minX + CGFloat(offset) / CGFloat(total) * waveRect.width
+        }
+
+        // Played region (left half — brighter).
         let playedPath = NSBezierPath()
-        for i in 0..<samples.count {
-            let x = rect.minX + CGFloat(i) / CGFloat(samples.count) * rect.width
-            guard x <= rect.minX + playedWidth else { break }
-            let y = mid + CGFloat(samples[i]) * halfH
-            if i == 0 { playedPath.move(to: NSPoint(x: x, y: y)) }
-            else       { playedPath.line(to: NSPoint(x: x, y: y)) }
+        for off in 0...visibleHalf {
+            let x = xFor(offset: off)
+            let y = mid + amp(at: center - visibleHalf + off) * halfH
+            if off == 0 { playedPath.move(to: NSPoint(x: x, y: y)) }
+            else         { playedPath.line(to: NSPoint(x: x, y: y)) }
         }
-        for i in stride(from: samples.count - 1, through: 0, by: -1) {
-            let x = rect.minX + CGFloat(i) / CGFloat(samples.count) * rect.width
-            guard x <= rect.minX + playedWidth else { continue }
-            playedPath.line(to: NSPoint(x: x, y: mid - CGFloat(samples[i]) * halfH))
+        for off in stride(from: visibleHalf, through: 0, by: -1) {
+            let x = xFor(offset: off)
+            playedPath.line(to: NSPoint(x: x, y: mid - amp(at: center - visibleHalf + off) * halfH))
         }
         playedPath.close()
-        color.withAlphaComponent(0.55).setFill()
+        color.withAlphaComponent(0.60).setFill()
         playedPath.fill()
 
-        // Playhead vertical line
-        let headX = rect.minX + CGFloat(progress) * rect.width
+        // Upcoming region (right half — dimmer).
+        let upcomingPath = NSBezierPath()
+        for off in visibleHalf...total {
+            let x = xFor(offset: off)
+            let y = mid + amp(at: center - visibleHalf + off) * halfH
+            if off == visibleHalf { upcomingPath.move(to: NSPoint(x: x, y: y)) }
+            else                  { upcomingPath.line(to: NSPoint(x: x, y: y)) }
+        }
+        for off in stride(from: total, through: visibleHalf, by: -1) {
+            let x = xFor(offset: off)
+            upcomingPath.line(to: NSPoint(x: x, y: mid - amp(at: center - visibleHalf + off) * halfH))
+        }
+        upcomingPath.close()
+        color.withAlphaComponent(0.25).setFill()
+        upcomingPath.fill()
+
+        // Center playhead — yellow when scratching, white when playing normally.
+        let headColor: NSColor = isScratchActive ? .systemYellow : .white
         let headPath = NSBezierPath()
-        headPath.move(to: NSPoint(x: headX, y: rect.minY + 4))
-        headPath.line(to: NSPoint(x: headX, y: rect.maxY - 4))
-        headPath.lineWidth = 1.5
-        NSColor.white.withAlphaComponent(0.9).setStroke()
+        headPath.move(to: NSPoint(x: waveRect.midX, y: waveRect.minY + 4))
+        headPath.line(to: NSPoint(x: waveRect.midX, y: waveRect.maxY - 4))
+        headPath.lineWidth = isScratchActive ? 2.0 : 1.5
+        headColor.withAlphaComponent(0.9).setStroke()
         headPath.stroke()
+
+        // Scratch rate arrow below playhead.
+        if isScratchActive && abs(scratchRate) > 0.05 {
+            drawScratchArrow(rate: scratchRate,
+                             at: NSPoint(x: waveRect.midX, y: waveRect.minY + 10),
+                             color: color)
+        }
+    }
+
+    private func drawScratchArrow(rate: Double, at center: NSPoint, color: NSColor) {
+        let size = min(14, CGFloat(abs(rate)) * 5)
+        let dir: CGFloat = rate > 0 ? 1 : -1
+        let arrow = NSBezierPath()
+        arrow.move(to: NSPoint(x: center.x + dir * size, y: center.y))
+        arrow.line(to: NSPoint(x: center.x - dir * size * 0.5, y: center.y + size * 0.5))
+        arrow.line(to: NSPoint(x: center.x - dir * size * 0.5, y: center.y - size * 0.5))
+        arrow.close()
+        color.withAlphaComponent(0.85).setFill()
+        arrow.fill()
     }
 
     private func drawTouches() {
