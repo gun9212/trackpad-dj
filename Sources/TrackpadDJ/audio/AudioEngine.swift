@@ -72,8 +72,13 @@ final class AudioEngine {
     }
 
     private func applyVolumes() {
-        _deckA.volume = faderA * (1.0 - crossfaderValue)
-        _deckB.volume = faderB * crossfaderValue
+        // Scratch crossfader curve: one deck is always at full gain.
+        // 0.0→0.5: A=full, B fades in.  0.5: both full.  0.5→1.0: B=full, A fades out.
+        let v = crossfaderValue
+        let aGain: Float = v <= 0.5 ? 1.0 : Float(1.0 - (v - 0.5) * 2.0)
+        let bGain: Float = v >= 0.5 ? 1.0 : Float(v * 2.0)
+        _deckA.volume = faderA * aGain
+        _deckB.volume = faderB * bGain
     }
 
     // MARK: - Track Loading

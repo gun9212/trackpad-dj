@@ -35,6 +35,9 @@ protocol DeckProtocol: AnyObject {
     /// Playback position normalized to [0, 1].
     var playbackProgress: Double { get }
 
+    /// Pre-roll 포함 진행도. 음수 = 프리롤 구간, 0~1 = 실제 트랙.
+    var extendedProgress: Double { get }
+
     /// Total track duration in seconds. 0 if no track loaded.
     var duration: Double { get }
 }

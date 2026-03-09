@@ -26,6 +26,8 @@ final class TouchLabViewController: NSViewController {
     private func refreshPlayheads() {
         touchLabView.progressA = audioEngine.deckA.playbackProgress
         touchLabView.progressB = audioEngine.deckB.playbackProgress
+        touchLabView.extendedProgressA = audioEngine.deckA.extendedProgress
+        touchLabView.extendedProgressB = audioEngine.deckB.extendedProgress
         touchLabView.durationA  = audioEngine.deckA.duration
         touchLabView.durationB  = audioEngine.deckB.duration
         touchLabView.faderA = audioEngine.faderA

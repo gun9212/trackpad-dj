@@ -48,6 +48,8 @@ final class TouchLabView: NSView {
     var waveformB: [Float] = [] { didSet { needsDisplay = true } }
     var progressA: Double = 0 { didSet { needsDisplay = true } }
     var progressB: Double = 0 { didSet { needsDisplay = true } }
+    var extendedProgressA: Double = 0 { didSet { needsDisplay = true } }
+    var extendedProgressB: Double = 0 { didSet { needsDisplay = true } }
     var durationA: Double = 0 { didSet { needsDisplay = true } }
     var durationB: Double = 0 { didSet { needsDisplay = true } }
     var faderA: Float = 1.0 { didSet { needsDisplay = true } }
@@ -214,7 +216,7 @@ final class TouchLabView: NSView {
                         filterLevelA = max(0, min(1, filterLevelA + deltaY))
                         onFilter?(.a, deltaY)
                     } else {
-                        let rate = Double(deltaX) * 25.0
+                        let rate = Double(deltaX) * 200.0
                         scratchRateA = rate
                         isScratchActiveA = true
                         onScratch?(.a, rate)
@@ -224,7 +226,7 @@ final class TouchLabView: NSView {
                         filterLevelB = max(0, min(1, filterLevelB + deltaY))
                         onFilter?(.b, deltaY)
                     } else {
-                        let rate = Double(deltaX) * 25.0
+                        let rate = Double(deltaX) * 200.0
                         scratchRateB = rate
                         isScratchActiveB = true
                         onScratch?(.b, rate)
@@ -335,12 +337,12 @@ final class TouchLabView: NSView {
 
     private func drawWaveforms() {
         if let zone = ZoneLayout.all.first(where: { $0.name == .deckA }) {
-            drawWaveform(waveformA, progress: progressA,
+            drawWaveform(waveformA, progress: extendedProgressA,
                          scratchRate: scratchRateA, isScratchActive: isScratchActiveA,
                          in: viewRect(from: zone.rect), color: zoneColor(for: .deckA))
         }
         if let zone = ZoneLayout.all.first(where: { $0.name == .deckB }) {
-            drawWaveform(waveformB, progress: progressB,
+            drawWaveform(waveformB, progress: extendedProgressB,
                          scratchRate: scratchRateB, isScratchActive: isScratchActiveB,
                          in: viewRect(from: zone.rect), color: zoneColor(for: .deckB))
         }
@@ -364,7 +366,7 @@ final class TouchLabView: NSView {
             NSBezierPath(rect: waveRect).fill()
         }
 
-        let visibleHalf = 50           // samples visible on each side of center
+        let visibleHalf = 150          // samples visible on each side of center
         let total = visibleHalf * 2
         let center = Int(progress * Double(samples.count))
 
