@@ -1,6 +1,7 @@
 import AppKit
 
 /// Renders the Touch Lab: zone boundaries and live touch point visualization.
+@MainActor
 final class TouchLabView: NSView {
 
     private(set) var session: TouchSession = .empty {

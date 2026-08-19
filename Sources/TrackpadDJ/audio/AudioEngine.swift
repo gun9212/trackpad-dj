@@ -2,6 +2,7 @@ import AVFoundation
 
 /// Owns the AVAudioEngine and both decks.
 /// Signal chain: player → mainMixerNode (reconnected with file format on load)
+@MainActor
 final class AudioEngine {
 
     // Public protocol interface — ViewController and View depend only on this.
@@ -135,15 +136,13 @@ final class AudioEngine {
     /// rate: 0 = freeze, 1.0 = normal speed, negative = reverse.
     func setScratch(deck: DeckID, rate: Double) {
         let d = deck == .a ? _deckA : _deckB
-        d.scratchRate = rate
-        d.isScratchActive = true
+        d.setScratch(rate: rate)
     }
 
     /// Called when the finger lifts from a deck zone.
     func endScratch(deck: DeckID) {
         let d = deck == .a ? _deckA : _deckB
-        d.isScratchActive = false
-        d.scratchRate = 1.0
+        d.endScratch()
     }
 
     // MARK: - Filter

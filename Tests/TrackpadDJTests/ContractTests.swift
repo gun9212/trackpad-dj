@@ -52,6 +52,7 @@ final class ContractTests: XCTestCase {
         XCTAssertNil(ZoneLayout.zone(for: CGPoint(x: 1.1, y: 0.5)))
     }
 
+    @MainActor
     func testRuntimeWAVFixtureLoadsIntoDeck() throws {
         let fixture = try RuntimeWAVFixture(duration: 0.1, sampleRate: 8_000, channels: 2)
         addTeardownBlock { fixture.remove() }

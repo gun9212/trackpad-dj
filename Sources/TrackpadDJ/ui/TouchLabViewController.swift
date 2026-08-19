@@ -2,6 +2,7 @@ import AppKit
 import UniformTypeIdentifiers
 
 /// Hosts the TouchLabView and wires it to the AudioEngine.
+@MainActor
 final class TouchLabViewController: NSViewController {
 
     private var touchLabView: TouchLabView!
@@ -18,9 +19,17 @@ final class TouchLabViewController: NSViewController {
     // MARK: - Display Timer (30 fps playhead update)
 
     private func startDisplayTimer() {
-        displayTimer = Timer.scheduledTimer(withTimeInterval: 1.0 / 30.0, repeats: true) { [weak self] _ in
-            self?.refreshPlayheads()
-        }
+        displayTimer = Timer.scheduledTimer(
+            timeInterval: 1.0 / 30.0,
+            target: self,
+            selector: #selector(displayTimerFired(_:)),
+            userInfo: nil,
+            repeats: true
+        )
+    }
+
+    @objc private func displayTimerFired(_ timer: Timer) {
+        refreshPlayheads()
     }
 
     private func refreshPlayheads() {
