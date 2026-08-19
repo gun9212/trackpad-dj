@@ -73,6 +73,7 @@ final class DeckRenderer: @unchecked Sendable {
         let sourceChannelCount = Int(audio.format.channelCount)
         let channelCount = min(sourceChannelCount, output.count)
         let totalFrames = Int(audio.buffer.frameLength)
+        var preFaderPeak: Float = 0
 
         for frame in 0..<Int(frameCount) {
             let sourceIndex = Int(floor(readPosition))
@@ -95,18 +96,21 @@ final class DeckRenderer: @unchecked Sendable {
             let fraction = Float(readPosition - Double(sourceIndex))
             for channel in 0..<channelCount {
                 let samples = output[channel].mData?.assumingMemoryBound(to: Float.self)
-                samples?[frame] = Self.cubicHermite(
+                let sample = Self.cubicHermite(
                     channelData[channel],
                     at: sourceIndex,
                     fraction: fraction,
                     totalFrames: totalFrames
                 )
+                samples?[frame] = sample
+                preFaderPeak = max(preFaderPeak, abs(sample))
             }
 
             readPosition = clampPosition(readPosition + advance)
         }
 
         state.publish(readPosition: readPosition)
+        state.publish(preFaderPeak: preFaderPeak)
         return noErr
     }
 
@@ -208,6 +212,10 @@ final class Deck: DeckProtocol {
 
     var pitchBendPercent: Double {
         realtimeState.pitchBendPercent
+    }
+
+    func consumePreFaderPeak() -> Float {
+        realtimeState.consumePreFaderPeak()
     }
 
     func install(_ track: LoadedTrack) {

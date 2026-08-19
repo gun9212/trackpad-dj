@@ -15,6 +15,7 @@ struct DeckSnapshot: Equatable, Sendable {
     let beatGridSource: BeatGridSource?
     let beatConfidence: Double?
     let waveformSamples: [Float]
+    let preFaderPeak: Float
     let faderLevel: Float
     let filterLevel: Float
     let monitorEnabled: Bool
@@ -34,6 +35,7 @@ struct DeckSnapshot: Equatable, Sendable {
             beatGridSource: nil,
             beatConfidence: nil,
             waveformSamples: [],
+            preFaderPeak: 0,
             faderLevel: 1,
             filterLevel: 1,
             monitorEnabled: false

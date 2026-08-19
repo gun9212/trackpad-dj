@@ -371,6 +371,7 @@ final class AudioEngine {
             beatGridSource: beatGrid?.source,
             beatConfidence: beatGrid?.confidence,
             waveformSamples: deck.waveformSamples,
+            preFaderPeak: deck.consumePreFaderPeak(),
             faderLevel: deckID == .a ? faderA : faderB,
             filterLevel: normalizedFilterLevel(for: cutoff),
             monitorEnabled: isMonitorEnabled(deck: deckID)

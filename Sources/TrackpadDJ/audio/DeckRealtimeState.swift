@@ -15,6 +15,7 @@ final class DeckRealtimeState: @unchecked Sendable {
     private let tempo = AtomicDouble(0)
     private let pitchBend = AtomicDouble(0)
     private let publishedPosition = AtomicDouble(0)
+    private let preFaderPeak = AtomicPeak()
     private let seekTarget = AtomicDouble(0)
     private let seekGeneration = ManagedAtomic<UInt64>(0)
 
@@ -102,6 +103,14 @@ final class DeckRealtimeState: @unchecked Sendable {
         publishedPosition.store(readPosition)
     }
 
+    func publish(preFaderPeak value: Float) {
+        preFaderPeak.publish(value)
+    }
+
+    func consumePreFaderPeak() -> Float {
+        preFaderPeak.consume()
+    }
+
     func reset(initialPosition: Double) {
         playing.store(false, ordering: .relaxed)
         scratchRate.store(0)
@@ -109,6 +118,7 @@ final class DeckRealtimeState: @unchecked Sendable {
         tempo.store(0)
         pitchBend.store(0)
         publishedPosition.store(initialPosition)
+        preFaderPeak.reset()
         requestSeek(to: initialPosition)
     }
 }

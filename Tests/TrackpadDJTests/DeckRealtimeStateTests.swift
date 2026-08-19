@@ -29,6 +29,17 @@ final class DeckRealtimeStateTests: XCTestCase {
         XCTAssertFalse(state.isPlaying)
     }
 
+    func testPeakAccumulatorKeepsConcurrentMaximumAndResetsOnConsume() {
+        let state = DeckRealtimeState()
+
+        DispatchQueue.concurrentPerform(iterations: 1_000) { index in
+            state.publish(preFaderPeak: Float(index) / 1_000)
+        }
+
+        XCTAssertEqual(state.consumePreFaderPeak(), 0.999, accuracy: 0.000_001)
+        XCTAssertEqual(state.consumePreFaderPeak(), 0)
+    }
+
     func testTempoIsClampedBeforePublication() {
         let state = DeckRealtimeState()
         state.setTempoPercent(20)
@@ -97,6 +108,51 @@ final class DeckRealtimeStateTests: XCTestCase {
         XCTAssertEqual(rendered[3], 0.4, accuracy: 0.0001)
         XCTAssertEqual(rendered[4], 0, accuracy: 0.0001)
         XCTAssertEqual(rendered[7], 0, accuracy: 0.0001)
+    }
+
+    func testRendererPublishesActualMultichannelPreFaderPeak() throws {
+        let format = try XCTUnwrap(AVAudioFormat(
+            commonFormat: .pcmFormatFloat32,
+            sampleRate: 8_000,
+            channels: 2,
+            interleaved: false
+        ))
+        let source = try XCTUnwrap(AVAudioPCMBuffer(
+            pcmFormat: format,
+            frameCapacity: 4
+        ))
+        source.frameLength = 4
+        let channels = try XCTUnwrap(source.floatChannelData)
+        channels[0][0] = 0.1
+        channels[0][1] = -0.4
+        channels[0][2] = 0.2
+        channels[0][3] = 0.1
+        channels[1][0] = 0.1
+        channels[1][1] = 0.2
+        channels[1][2] = -0.75
+        channels[1][3] = 0.1
+
+        let state = DeckRealtimeState()
+        state.reset(initialPosition: 0)
+        state.setPlaying(true)
+        let renderer = DeckRenderer(
+            audio: DeckAudioData(buffer: source, format: format, preRollFrames: 0),
+            state: state
+        )
+        let output = try XCTUnwrap(AVAudioPCMBuffer(
+            pcmFormat: format,
+            frameCapacity: 4
+        ))
+        output.frameLength = 4
+        var isSilence = ObjCBool(false)
+
+        XCTAssertEqual(renderer.render(
+            isSilence: &isSilence,
+            frameCount: 4,
+            audioBufferList: output.mutableAudioBufferList
+        ), noErr)
+        XCTAssertEqual(state.consumePreFaderPeak(), 0.75, accuracy: 0.000_001)
+        XCTAssertEqual(state.consumePreFaderPeak(), 0)
     }
 
     func testRendererUsesTempoAndReturnsToItAfterScratch() throws {

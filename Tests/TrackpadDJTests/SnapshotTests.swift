@@ -20,6 +20,7 @@ final class SnapshotTests: XCTestCase {
         let updated = engine.snapshot(for: .a)
         XCTAssertEqual(updated.tempoPercent, 2.5)
         XCTAssertEqual(updated.pitchBendPercent, -3)
+        XCTAssertEqual(updated.preFaderPeak, 0)
         XCTAssertEqual(updated.faderLevel, 0.75)
         XCTAssertEqual(updated.filterLevel, 0.5, accuracy: 0.000_001)
         XCTAssertTrue(updated.monitorEnabled)
