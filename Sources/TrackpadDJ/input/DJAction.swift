@@ -22,6 +22,4 @@ enum DJAction: Equatable, Sendable {
     case setScratch(DeckID, Double)
     case endScratch(DeckID)
     case tapBPM(DeckID)
-    case setHotCue(DeckID, Int)
-    case jumpToHotCue(DeckID, Int)
 }

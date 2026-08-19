@@ -170,4 +170,13 @@ final class OutputRoutingTests: XCTestCase {
         XCTAssertEqual(deckBResult, .installed)
         XCTAssertNil(engine.routingErrorMessage)
     }
+
+    @MainActor
+    func testSplitCueShutdownIsIdempotent() async throws {
+        let engine = AudioEngine(startsAudioEngine: false)
+        try await engine.setOutputMode(.splitCue)
+
+        engine.shutdown()
+        engine.shutdown()
+    }
 }

@@ -15,39 +15,18 @@ final class TouchLabView: NSView {
     private var inputTimer: Timer?
     private weak var observedWindow: NSWindow?
 
-    var crossfaderValue: Float = CrossfaderState.center.value {
-        didSet { needsDisplay = true }
-    }
     private let crossfaderModeValues: [Float] = [0.0, 0.5, 1.0]
 
     // MARK: - Action Callback (set by ViewController)
 
     var onAction: ((DJAction) -> Void)?
 
-    // MARK: - Deck Status (updated by ViewController)
+    // MARK: - Display State (updated atomically by ViewController)
 
-    var deckALabel: String = "A: —" { didSet { needsDisplay = true } }
-    var deckBLabel: String = "B: —" { didSet { needsDisplay = true } }
+    private(set) var deckASnapshot = DeckSnapshot.empty(deck: .a)
+    private(set) var deckBSnapshot = DeckSnapshot.empty(deck: .b)
+    private(set) var mixerSnapshot = MixerSnapshot.initial
     var statusMessage: String? { didSet { needsDisplay = true } }
-
-    // MARK: - Waveform Data (updated by ViewController)
-
-    var waveformA: [Float] = [] { didSet { needsDisplay = true } }
-    var waveformB: [Float] = [] { didSet { needsDisplay = true } }
-    var progressA: Double = 0 { didSet { needsDisplay = true } }
-    var progressB: Double = 0 { didSet { needsDisplay = true } }
-    var extendedProgressA: Double = 0 { didSet { needsDisplay = true } }
-    var extendedProgressB: Double = 0 { didSet { needsDisplay = true } }
-    var hotCuesA: [Double?] = Array(repeating: nil, count: 4) { didSet { needsDisplay = true } }
-    var hotCuesB: [Double?] = Array(repeating: nil, count: 4) { didSet { needsDisplay = true } }
-    var durationA: Double = 0 { didSet { needsDisplay = true } }
-    var durationB: Double = 0 { didSet { needsDisplay = true } }
-    var faderA: Float = 1.0 { didSet { needsDisplay = true } }
-    var faderB: Float = 1.0 { didSet { needsDisplay = true } }
-
-    // Accumulated filter level [0, 1]. 1.0 = fully open (default).
-    private var filterLevelA: Float = 1.0
-    private var filterLevelB: Float = 1.0
 
     // BPM tap state — purely local, no audio-side dependency.
     private var bpmTapA = BPMTapState()
@@ -78,6 +57,17 @@ final class TouchLabView: NSView {
     }
 
     override var acceptsFirstResponder: Bool { true }
+
+    func apply(
+        deckA: DeckSnapshot,
+        deckB: DeckSnapshot,
+        mixer: MixerSnapshot
+    ) {
+        deckASnapshot = deckA
+        deckBSnapshot = deckB
+        mixerSnapshot = mixer
+        needsDisplay = true
+    }
 
     override func viewDidMoveToWindow() {
         super.viewDidMoveToWindow()
@@ -120,7 +110,15 @@ final class TouchLabView: NSView {
 
     override func keyDown(with event: NSEvent) {
         let shift = event.modifierFlags.contains(.shift)
-        guard KeyboardMapping.handles(event.keyCode, shift: shift) else {
+        let systemModifiers: NSEvent.ModifierFlags = [.command, .control, .option]
+        let hasSystemModifier = !event.modifierFlags
+            .intersection(systemModifiers)
+            .isEmpty
+        guard KeyboardMapping.handles(
+            event.keyCode,
+            shift: shift,
+            hasSystemModifier: hasSystemModifier
+        ) else {
             super.keyDown(with: event)
             return
         }
@@ -132,10 +130,11 @@ final class TouchLabView: NSView {
     }
 
     override func keyUp(with event: NSEvent) {
-        if KeyboardMapping.handles(
-            event.keyCode,
-            shift: event.modifierFlags.contains(.shift)
-        ) {
+        if KeyboardMapping.isHeldKey(event.keyCode)
+            || KeyboardMapping.oneShotAction(
+                for: event.keyCode,
+                shift: event.modifierFlags.contains(.shift)
+            ) != nil {
             keyboardStateMachine.keyUp(keyCode: event.keyCode)
         } else {
             super.keyUp(with: event)
@@ -148,9 +147,9 @@ final class TouchLabView: NSView {
         let now = CACurrentMediaTime()
         switch deck {
         case .a:
-            bpmTapA.tap(at: now, progress: extendedProgressA)
+            bpmTapA.tap(at: now, progress: deckASnapshot.extendedProgress)
         case .b:
-            bpmTapB.tap(at: now, progress: extendedProgressB)
+            bpmTapB.tap(at: now, progress: deckBSnapshot.extendedProgress)
         }
         needsDisplay = true
     }
@@ -159,12 +158,10 @@ final class TouchLabView: NSView {
         switch deck {
         case .a:
             bpmTapA.reset()
-            hotCuesA = Array(repeating: nil, count: 4)
             scratchRateA = 0
             isScratchActiveA = false
         case .b:
             bpmTapB.reset()
-            hotCuesB = Array(repeating: nil, count: 4)
             scratchRateB = 0
             isScratchActiveB = false
         }
@@ -274,10 +271,6 @@ final class TouchLabView: NSView {
     private func emit(_ actions: [DJAction]) {
         for action in actions {
             switch action {
-            case .adjustFilter(.a, let delta):
-                filterLevelA = max(0, min(1, filterLevelA + delta))
-            case .adjustFilter(.b, let delta):
-                filterLevelB = max(0, min(1, filterLevelB + delta))
             case .setScratch(.a, let rate):
                 isScratchActiveA = true
                 scratchRateA = rate
@@ -292,9 +285,9 @@ final class TouchLabView: NSView {
                 scratchRateB = 0
             case .tapBPM(let deck):
                 handleBpmTap(deck: deck)
-            case .load, .togglePlay, .cue, .nudge, .adjustVolume,
+            case .load, .togglePlay, .cue, .nudge, .adjustFilter, .adjustVolume,
                  .adjustTempo, .resetTempo, .adjustCrossfader, .stepCrossfader,
-                 .toggleMonitor, .toggleOutputMode, .setHotCue, .jumpToHotCue:
+                 .toggleMonitor, .toggleOutputMode:
                 break
             }
             onAction?(action)
@@ -335,7 +328,9 @@ final class TouchLabView: NSView {
             border.lineWidth = 1.0
             border.stroke()
 
-            drawLabel(zone.name.rawValue, in: rect, color: color)
+            if zone.name == .deckA || zone.name == .deckB {
+                drawLabel(zone.name.rawValue, in: rect, color: color)
+            }
         }
     }
 
@@ -352,21 +347,25 @@ final class TouchLabView: NSView {
 
     private func drawWaveforms() {
         if let zone = ZoneLayout.all.first(where: { $0.name == .deckA }) {
-            drawWaveform(waveformA, progress: extendedProgressA, hotCues: hotCuesA,
-                         bpm: bpmA, beatOffset: beatOffsetA, duration: durationA,
+            drawWaveform(deckASnapshot.waveformSamples,
+                         progress: deckASnapshot.extendedProgress,
+                         bpm: bpmA, beatOffset: beatOffsetA,
+                         duration: deckASnapshot.duration,
                          scratchRate: scratchRateA, isScratchActive: isScratchActiveA,
                          in: viewRect(from: zone.rect), color: zoneColor(for: .deckA))
         }
         if let zone = ZoneLayout.all.first(where: { $0.name == .deckB }) {
-            drawWaveform(waveformB, progress: extendedProgressB, hotCues: hotCuesB,
-                         bpm: bpmB, beatOffset: beatOffsetB, duration: durationB,
+            drawWaveform(deckBSnapshot.waveformSamples,
+                         progress: deckBSnapshot.extendedProgress,
+                         bpm: bpmB, beatOffset: beatOffsetB,
+                         duration: deckBSnapshot.duration,
                          scratchRate: scratchRateB, isScratchActive: isScratchActiveB,
                          in: viewRect(from: zone.rect), color: zoneColor(for: .deckB))
         }
     }
 
     /// Scrolling waveform: playhead fixed at center, waveform scrolls with playback.
-    private func drawWaveform(_ samples: [Float], progress: Double, hotCues: [Double?],
+    private func drawWaveform(_ samples: [Float], progress: Double,
                                bpm: Double, beatOffset: Double, duration: Double,
                                scratchRate: Double, isScratchActive: Bool,
                                in rect: NSRect, color: NSColor) {
@@ -469,26 +468,6 @@ final class TouchLabView: NSView {
                                          .font: NSFont.systemFont(ofSize: 10)])
         }
 
-        // Hot cue markers: colored vertical lines on the waveform.
-        let cueColors: [NSColor] = [.systemOrange, .systemCyan, .systemGreen, .systemPurple]
-        for (i, cueProgress) in hotCues.enumerated() {
-            guard let cue = cueProgress else { continue }
-            let cueIdx = Int(cue * Double(samples.count))
-            let offset = cueIdx - center
-            guard offset >= -visibleHalf && offset <= visibleHalf else { continue }
-            let x = xFor(offset: offset + visibleHalf)
-            let cuePath = NSBezierPath()
-            cuePath.move(to: NSPoint(x: x, y: waveRect.minY))
-            cuePath.line(to: NSPoint(x: x, y: waveRect.maxY))
-            cuePath.lineWidth = 1.5
-            cueColors[i].withAlphaComponent(0.9).setStroke()
-            cuePath.stroke()
-            // 번호 레이블
-            let label = "\(i + 1)" as NSString
-            label.draw(at: NSPoint(x: x + 2, y: waveRect.maxY - 14),
-                       withAttributes: [.foregroundColor: cueColors[i],
-                                        .font: NSFont.systemFont(ofSize: 10, weight: .bold)])
-        }
     }
 
     private func drawScratchArrow(rate: Double, at center: NSPoint, color: NSColor) {
@@ -522,25 +501,58 @@ final class TouchLabView: NSView {
     }
 
     private func drawHUD() {
-        // Key hint at bottom center
-        let hint = "Q/W:load  A/S:play  Z/X:cue  E·D/R·F:vol  T·G/Y·H:filter  ↑·↓/I·K:nudge  ←/→:xfade"
+        let hints = [
+            "Q/W:load  A/S:play  Z/X:cue  E·D/R·F:vol  T·G/Y·H:filter  ↑·↓/I·K:nudge  ←/→:xfade",
+            "U·J/O·L:tempo  5/6:tempo reset  B/N:tap BPM  C/V:MON  M:split cue",
+        ]
         let hintAttrs: [NSAttributedString.Key: Any] = [
             .foregroundColor: NSColor.white.withAlphaComponent(0.2),
-            .font: NSFont.monospacedSystemFont(ofSize: 9, weight: .regular),
+            .font: NSFont.monospacedSystemFont(ofSize: 8, weight: .regular),
         ]
-        let hintStr = NSAttributedString(string: hint, attributes: hintAttrs)
-        let hintX = (bounds.width - hintStr.size().width) / 2
-        hintStr.draw(at: NSPoint(x: hintX, y: 8))
+        for (index, hint) in hints.enumerated() {
+            let hintString = NSAttributedString(string: hint, attributes: hintAttrs)
+            hintString.draw(at: NSPoint(
+                x: (bounds.width - hintString.size().width) / 2,
+                y: 6 + CGFloat(index) * 11
+            ))
+        }
 
         if let statusMessage {
             let statusAttrs: [NSAttributedString.Key: Any] = [
-                .foregroundColor: NSColor.systemYellow.withAlphaComponent(0.9),
+                .foregroundColor: NSColor.white.withAlphaComponent(0.75),
                 .font: NSFont.monospacedSystemFont(ofSize: 11, weight: .medium),
             ]
             let status = NSAttributedString(string: statusMessage, attributes: statusAttrs)
             status.draw(at: NSPoint(
                 x: (bounds.width - status.size().width) / 2,
-                y: 24
+                y: bounds.height - 38
+            ))
+        }
+
+        let outputWarning: String?
+        let outputColor: NSColor
+        if let routingError = mixerSnapshot.routingErrorMessage {
+            outputWarning = "AUDIO STOPPED — \(routingError)"
+            outputColor = .systemRed
+        } else if mixerSnapshot.outputMode == .splitCue {
+            outputWarning = "SPLIT CUE — L: MASTER / R: CUE"
+            outputColor = .systemYellow
+        } else {
+            outputWarning = nil
+            outputColor = .clear
+        }
+
+        if let outputWarning {
+            let warning = NSAttributedString(
+                string: outputWarning,
+                attributes: [
+                    .foregroundColor: outputColor.withAlphaComponent(0.95),
+                    .font: NSFont.monospacedSystemFont(ofSize: 12, weight: .bold),
+                ]
+            )
+            warning.draw(at: NSPoint(
+                x: (bounds.width - warning.size().width) / 2,
+                y: bounds.height - 21
             ))
         }
     }
@@ -553,12 +565,14 @@ final class TouchLabView: NSView {
         // Deck A fader — left half
         let aRect = NSRect(x: rect.minX + 4, y: rect.minY + 4,
                            width: rect.width / 2 - 8, height: rect.height - 8)
-        drawFaderBar(in: aRect, level: CGFloat(faderA), color: zoneColor(for: .deckA), label: "VOL A")
+        drawFaderBar(in: aRect, level: CGFloat(deckASnapshot.faderLevel),
+                     color: zoneColor(for: .deckA), label: "VOL A")
 
         // Deck B fader — right half
         let bRect = NSRect(x: midX + 4, y: rect.minY + 4,
                            width: rect.width / 2 - 8, height: rect.height - 8)
-        drawFaderBar(in: bRect, level: CGFloat(faderB), color: zoneColor(for: .deckB), label: "VOL B")
+        drawFaderBar(in: bRect, level: CGFloat(deckBSnapshot.faderLevel),
+                     color: zoneColor(for: .deckB), label: "VOL B")
     }
 
     private func drawFaderBar(in rect: NSRect, level: CGFloat, color: NSColor, label: String) {
@@ -591,7 +605,8 @@ final class TouchLabView: NSView {
         // A / A+B / B mode labels — highlight active mode
         let modeLabels = ["A", "A+B", "B"]
         let crossfaderMode = crossfaderModeValues.enumerated().min {
-            abs($0.element - crossfaderValue) < abs($1.element - crossfaderValue)
+            abs($0.element - mixerSnapshot.crossfaderValue)
+                < abs($1.element - mixerSnapshot.crossfaderValue)
         }?.offset ?? 1
         let segW = stripRect.width / 3
         for (i, label) in modeLabels.enumerated() {
@@ -615,7 +630,7 @@ final class TouchLabView: NSView {
         }
 
         // Playhead line at exact crossfader position
-        let xPos = stripRect.minX + CGFloat(crossfaderValue) * stripRect.width
+        let xPos = stripRect.minX + CGFloat(mixerSnapshot.crossfaderValue) * stripRect.width
         let line = NSBezierPath()
         line.move(to: NSPoint(x: xPos, y: stripRect.minY + 2))
         line.line(to: NSPoint(x: xPos, y: stripRect.maxY - 2))
@@ -628,16 +643,16 @@ final class TouchLabView: NSView {
 
     private func drawDeckHeaders() {
         if let zone = ZoneLayout.all.first(where: { $0.name == .deckA }) {
-            drawDeckHeader(label: deckALabel, progress: progressA, duration: durationA,
+            drawDeckHeader(snapshot: deckASnapshot,
                            in: viewRect(from: zone.rect), color: zoneColor(for: .deckA))
         }
         if let zone = ZoneLayout.all.first(where: { $0.name == .deckB }) {
-            drawDeckHeader(label: deckBLabel, progress: progressB, duration: durationB,
+            drawDeckHeader(snapshot: deckBSnapshot,
                            in: viewRect(from: zone.rect), color: zoneColor(for: .deckB))
         }
     }
 
-    private func drawDeckHeader(label: String, progress: Double, duration: Double,
+    private func drawDeckHeader(snapshot: DeckSnapshot,
                                  in rect: NSRect, color: NSColor) {
         let headerH: CGFloat = 20
         let headerRect = NSRect(x: rect.minX, y: rect.maxY - headerH,
@@ -648,14 +663,17 @@ final class TouchLabView: NSView {
             .foregroundColor: color.withAlphaComponent(0.9),
             .font: NSFont.monospacedSystemFont(ofSize: 11, weight: .medium),
         ]
+        let tempo = String(format: "%+.2f%%", snapshot.tempoPercent)
+        let monitor = snapshot.monitorEnabled ? "  MON" : ""
+        let label = "\(snapshot.deck == .a ? "A" : "B"): \(snapshot.trackName ?? "—")  \(snapshot.isPlaying ? "▶" : "■")  \(tempo)\(monitor)"
         NSAttributedString(string: label, attributes: nameAttrs)
             .draw(at: NSPoint(x: headerRect.minX + 6, y: headerRect.minY + 3))
 
         // Time display (right side): elapsed / total
-        guard duration > 0 else { return }
-        let elapsed = progress * duration
-        let remaining = duration - elapsed
-        let timeStr = "-\(formatTime(remaining))  /  \(formatTime(duration))"
+        guard snapshot.duration > 0 else { return }
+        let elapsed = snapshot.playbackProgress * snapshot.duration
+        let remaining = snapshot.duration - elapsed
+        let timeStr = "-\(formatTime(remaining))  /  \(formatTime(snapshot.duration))"
         let timeAttrs: [NSAttributedString.Key: Any] = [
             .foregroundColor: color.withAlphaComponent(0.6),
             .font: NSFont.monospacedSystemFont(ofSize: 10, weight: .regular),
@@ -675,11 +693,11 @@ final class TouchLabView: NSView {
 
     private func drawFilterIndicators() {
         if let zone = ZoneLayout.all.first(where: { $0.name == .deckA }) {
-            drawFilterBar(level: filterLevelA, in: viewRect(from: zone.rect),
+            drawFilterBar(level: deckASnapshot.filterLevel, in: viewRect(from: zone.rect),
                           color: zoneColor(for: .deckA))
         }
         if let zone = ZoneLayout.all.first(where: { $0.name == .deckB }) {
-            drawFilterBar(level: filterLevelB, in: viewRect(from: zone.rect),
+            drawFilterBar(level: deckBSnapshot.filterLevel, in: viewRect(from: zone.rect),
                           color: zoneColor(for: .deckB))
         }
     }

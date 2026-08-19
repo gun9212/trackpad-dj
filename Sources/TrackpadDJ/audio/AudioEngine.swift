@@ -21,6 +21,7 @@ final class AudioEngine {
     private let startsAudioEngine: Bool
     private var splitCueMatrices: [DeckID: SplitCueMatrix] = [:]
     private var isPreparingSplitCue = false
+    private var isShutdown = false
 
     private(set) var outputMode: OutputMode = .stereoMaster
     private(set) var routingErrorMessage: String?
@@ -80,6 +81,7 @@ final class AudioEngine {
     }
 
     private func recoverAfterConfigurationChange() {
+        guard !isShutdown else { return }
         do {
             try rebuildOutputGraph(for: outputMode, startEngine: startsAudioEngine)
             publishRoutingError(nil)
@@ -190,6 +192,8 @@ final class AudioEngine {
     /// Tears down every connection explicitly so AVFAudio never has to infer
     /// the destruction order of a one-to-many Split Cue graph.
     func shutdown() {
+        guard !isShutdown else { return }
+        isShutdown = true
         NotificationCenter.default.removeObserver(
             self,
             name: .AVAudioEngineConfigurationChange,
@@ -319,6 +323,38 @@ final class AudioEngine {
         let (aGain, bGain) = CrossfaderCurve.equalPowerGains(at: crossfaderValue)
         _deckA.volume = faderA * aGain
         _deckB.volume = faderB * bGain
+    }
+
+    // MARK: - UI Snapshots
+
+    func snapshot(for deckID: DeckID) -> DeckSnapshot {
+        let deck = deckID == .a ? _deckA : _deckB
+        let cutoff = deckID == .a ? cutoffA : cutoffB
+        return DeckSnapshot(
+            deck: deckID,
+            trackName: deck.trackName,
+            isPlaying: deck.isPlaying,
+            playbackProgress: deck.playbackProgress,
+            extendedProgress: deck.extendedProgress,
+            duration: deck.duration,
+            tempoPercent: deck.tempoPercent,
+            waveformSamples: deck.waveformSamples,
+            faderLevel: deckID == .a ? faderA : faderB,
+            filterLevel: normalizedFilterLevel(for: cutoff),
+            monitorEnabled: isMonitorEnabled(deck: deckID)
+        )
+    }
+
+    func mixerSnapshot() -> MixerSnapshot {
+        MixerSnapshot(
+            crossfaderValue: crossfaderValue,
+            outputMode: outputMode,
+            routingErrorMessage: routingErrorMessage
+        )
+    }
+
+    private func normalizedFilterLevel(for cutoff: Float) -> Float {
+        min(1, max(0, log10(cutoff / 200) / 2))
     }
 
     // MARK: - Tempo

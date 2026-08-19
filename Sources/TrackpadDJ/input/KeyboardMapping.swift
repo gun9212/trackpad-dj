@@ -19,13 +19,6 @@ enum KeyboardMapping {
         case 8: return .toggleMonitor(.a)     // C
         case 9: return .toggleMonitor(.b)     // V
         case 46: return .toggleOutputMode     // M
-        case 18, 19, 20, 21:                 // 1, 2, 3, 4
-            let index = Int(keyCode) - 18
-            return shift ? .setHotCue(.a, index) : .jumpToHotCue(.a, index)
-        case 26, 28, 25, 29:                 // 7, 8, 9, 0
-            let indexByKey: [UInt16: Int] = [26: 0, 28: 1, 25: 2, 29: 3]
-            guard let index = indexByKey[keyCode] else { return nil }
-            return shift ? .setHotCue(.b, index) : .jumpToHotCue(.b, index)
         default:
             return nil
         }
@@ -35,8 +28,13 @@ enum KeyboardMapping {
         heldKeyCodes.contains(keyCode)
     }
 
-    static func handles(_ keyCode: UInt16, shift: Bool) -> Bool {
-        oneShotAction(for: keyCode, shift: shift) != nil || isHeldKey(keyCode)
+    static func handles(
+        _ keyCode: UInt16,
+        shift: Bool,
+        hasSystemModifier: Bool = false
+    ) -> Bool {
+        guard !hasSystemModifier else { return false }
+        return oneShotAction(for: keyCode, shift: shift) != nil || isHeldKey(keyCode)
     }
 
     private static let heldKeyCodes: Set<UInt16> = [

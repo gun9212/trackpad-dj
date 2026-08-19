@@ -9,12 +9,12 @@ final class TouchLabViewController: NSViewController {
     private let audioEngine = AudioEngine()
     private var displayTimer: Timer?
     private var loadStatusByDeck: [DeckID: String] = [:]
-    private var outputStatus: String?
 
     override func loadView() {
         touchLabView = TouchLabView(frame: NSRect(x: 0, y: 0, width: 900, height: 600))
         view = touchLabView
         wireCallbacks()
+        refreshDisplaySnapshot()
         startDisplayTimer()
     }
 
@@ -31,24 +31,26 @@ final class TouchLabViewController: NSViewController {
     }
 
     @objc private func displayTimerFired(_ timer: Timer) {
-        refreshPlayheads()
+        refreshDisplaySnapshot()
     }
 
-    private func refreshPlayheads() {
-        touchLabView.progressA = audioEngine.deckA.playbackProgress
-        touchLabView.progressB = audioEngine.deckB.playbackProgress
-        touchLabView.extendedProgressA = audioEngine.deckA.extendedProgress
-        touchLabView.extendedProgressB = audioEngine.deckB.extendedProgress
-        touchLabView.durationA  = audioEngine.deckA.duration
-        touchLabView.durationB  = audioEngine.deckB.duration
-        touchLabView.faderA = audioEngine.faderA
-        touchLabView.faderB = audioEngine.faderB
-        touchLabView.crossfaderValue = audioEngine.crossfaderValue
+    private func refreshDisplaySnapshot() {
+        touchLabView.apply(
+            deckA: audioEngine.snapshot(for: .a),
+            deckB: audioEngine.snapshot(for: .b),
+            mixer: audioEngine.mixerSnapshot()
+        )
     }
 
     override func viewDidAppear() {
         super.viewDidAppear()
         view.window?.makeFirstResponder(touchLabView)
+    }
+
+    func shutdown() {
+        displayTimer?.invalidate()
+        displayTimer = nil
+        audioEngine.shutdown()
     }
 
     // MARK: - Wiring
@@ -57,10 +59,9 @@ final class TouchLabViewController: NSViewController {
         touchLabView.onAction = { [weak self] action in
             self?.handle(action)
         }
-        audioEngine.onRoutingError = { [weak self] message in
-            self?.refreshOutputStatus(error: message)
+        audioEngine.onRoutingError = { [weak self] _ in
+            self?.refreshDisplaySnapshot()
         }
-        refreshOutputStatus(error: audioEngine.routingErrorMessage)
     }
 
     private func handle(_ action: DJAction) {
@@ -73,10 +74,8 @@ final class TouchLabViewController: NSViewController {
             presentOpenPanel(for: deck)
         case .togglePlay(let deck):
             audioEngine.togglePlayPause(deck: deck)
-            refreshDeckLabels()
         case .cue(let deck):
             audioEngine.cue(deck: deck)
-            refreshDeckLabels()
         case .nudge(let deck, let delta):
             audioEngine.scrub(deck: deck, deltaX: delta)
         case .adjustFilter(let deck, let delta):
@@ -89,22 +88,22 @@ final class TouchLabViewController: NSViewController {
             audioEngine.resetTempo(deck: deck)
         case .toggleMonitor(let deck):
             audioEngine.toggleMonitor(deck: deck)
-            refreshOutputStatus(error: audioEngine.routingErrorMessage)
+            refreshDisplaySnapshot()
         case .toggleOutputMode:
             Task { @MainActor [weak self] in
                 guard let self else { return }
                 do {
                     try await self.audioEngine.toggleOutputMode()
-                    self.refreshOutputStatus(error: nil)
+                    self.refreshDisplaySnapshot()
                 } catch {
-                    self.refreshOutputStatus(error: error.localizedDescription)
+                    self.refreshDisplaySnapshot()
                 }
             }
         case .setScratch(let deck, let rate):
             audioEngine.setScratch(deck: deck, rate: rate)
         case .endScratch(let deck):
             audioEngine.endScratch(deck: deck)
-        case .tapBPM, .setHotCue, .jumpToHotCue:
+        case .tapBPM:
             break
         }
     }
@@ -130,9 +129,7 @@ final class TouchLabViewController: NSViewController {
                     let result = try await self.audioEngine.loadTrack(url: url, deck: deckID)
                     guard result == .installed else { return }
                     self.touchLabView.resetTransientState(for: deckID)
-                    self.refreshDeckLabels()
-                    self.refreshWaveform(deck: deckID)
-                    self.refreshPlayheads()
+                    self.refreshDisplaySnapshot()
                     self.setLoadStatus(nil, for: deckID)
                 } catch {
                     self.setLoadStatus(
@@ -149,44 +146,10 @@ final class TouchLabViewController: NSViewController {
         refreshStatusMessage()
     }
 
-    private func refreshOutputStatus(error: String?) {
-        if let error {
-            outputStatus = "AUDIO STOPPED — \(error)"
-        } else if audioEngine.outputMode == .splitCue {
-            let monitoredDecks = [
-                audioEngine.isMonitorEnabled(deck: .a) ? "A" : nil,
-                audioEngine.isMonitorEnabled(deck: .b) ? "B" : nil,
-            ].compactMap { $0 }.joined(separator: "+")
-            outputStatus = "SPLIT CUE — L: MASTER / R: CUE — MON \(monitoredDecks.isEmpty ? "OFF" : monitoredDecks)"
-        } else {
-            outputStatus = nil
-        }
-        refreshStatusMessage()
-    }
-
     private func refreshStatusMessage() {
-        let loadStatuses = [DeckID.a, .b]
+        let status = [DeckID.a, .b]
             .compactMap { loadStatusByDeck[$0] }
             .joined(separator: "   |   ")
-        touchLabView.statusMessage = [outputStatus, loadStatuses.isEmpty ? nil : loadStatuses]
-            .compactMap { $0 }
-            .joined(separator: "   |   ")
-        if touchLabView.statusMessage == "" { touchLabView.statusMessage = nil }
-    }
-
-    // MARK: - HUD Updates
-
-    private func refreshWaveform(deck: DeckID) {
-        switch deck {
-        case .a: touchLabView.waveformA = audioEngine.deckA.waveformSamples
-        case .b: touchLabView.waveformB = audioEngine.deckB.waveformSamples
-        }
-    }
-
-    private func refreshDeckLabels() {
-        let a = audioEngine.deckA
-        let b = audioEngine.deckB
-        touchLabView.deckALabel = "A: \(a.trackName ?? "—")  \(a.isPlaying ? "▶" : "■")"
-        touchLabView.deckBLabel = "\(b.isPlaying ? "▶" : "■")  \(b.trackName ?? "—") :B"
+        touchLabView.statusMessage = status.isEmpty ? nil : status
     }
 }

@@ -4,7 +4,7 @@ import CoreGraphics
 struct Zone {
 
     enum Name: String, CaseIterable, Sendable {
-        case topStrip    = "Browse"
+        case topStrip    = "Volume"
         case deckA       = "Deck A"
         case deckB       = "Deck B"
         case bottomStrip = "Crossfader"
@@ -25,7 +25,7 @@ struct Zone {
 /// Layout (Y increases upward):
 ///
 ///   ┌─────────────────────┐  y = 1.0
-///   │      Browse         │  top strip  (h = 0.20)
+///   │      Volume         │  top strip  (h = 0.20)
 ///   ├──────────┬──────────┤  y = 0.80
 ///   │          │          │
 ///   │  Deck A  │  Deck B  │  deck zones (h = 0.65)
