@@ -31,6 +31,43 @@ final class TrackLoaderTests: XCTestCase {
         }
     }
 
+    func testBeatAnalyzerFindsRegularBeatThroughDenseEnergyModulation() throws {
+        let sampleRate = 200.0
+        let energy = makeEnergyEnvelope(
+            sampleRate: sampleRate,
+            pulseTrains: [(bpm: 92, amplitude: 0.03, width: 14)],
+            modulation: (frequency: 30, amplitude: 0.01)
+        )
+
+        let grid = try XCTUnwrap(BeatGridAnalyzer.analyzeEnergyEnvelope(
+            energy,
+            sampleRate: sampleRate
+        ))
+
+        XCTAssertEqual(grid.bpm, 92, accuracy: 1)
+        XCTAssertGreaterThanOrEqual(grid.confidence, BeatGridAnalyzer.minimumConfidence)
+    }
+
+    func testBeatAnalyzerCombinesBaseAndDoubleTempoEvidence() throws {
+        let sampleRate = 200.0
+        let energy = makeEnergyEnvelope(
+            sampleRate: sampleRate,
+            pulseTrains: [
+                (bpm: 96, amplitude: 0.02, width: 12),
+                (bpm: 192, amplitude: 0.01, width: 6),
+                (bpm: 64, amplitude: 0.05, width: 18),
+            ]
+        )
+
+        let grid = try XCTUnwrap(BeatGridAnalyzer.analyzeEnergyEnvelope(
+            energy,
+            sampleRate: sampleRate
+        ))
+
+        XCTAssertEqual(grid.bpm, 96, accuracy: 1)
+        XCTAssertGreaterThanOrEqual(grid.confidence, BeatGridAnalyzer.minimumConfidence)
+    }
+
     func testBeatAnalyzerRejectsShortAndLowConfidenceSignals() throws {
         XCTAssertNil(BeatGridAnalyzer.analyze(
             try makeClickBuffer(bpm: 120, leadingSilence: 0, duration: 7.9)
@@ -174,6 +211,39 @@ final class TrackLoaderTests: XCTestCase {
             beatTime += 60 / bpm
         }
         return buffer
+    }
+
+    private func makeEnergyEnvelope(
+        duration: TimeInterval = 20,
+        sampleRate: Double,
+        pulseTrains: [(bpm: Double, amplitude: Float, width: Int)],
+        modulation: (frequency: Double, amplitude: Float)? = nil
+    ) -> [Float] {
+        let count = Int((duration * sampleRate).rounded())
+        var energy = [Float](repeating: 0.3, count: count)
+
+        if let modulation {
+            for index in energy.indices {
+                let time = Double(index) / sampleRate
+                energy[index] += modulation.amplitude * Float(
+                    0.5 + 0.5 * sin(2 * .pi * modulation.frequency * time)
+                )
+            }
+        }
+
+        for train in pulseTrains {
+            var beatTime: TimeInterval = 0
+            while beatTime < duration {
+                let start = Int((beatTime * sampleRate).rounded())
+                for offset in 0..<train.width where start + offset < count {
+                    let decay = exp(-Double(offset) / (Double(train.width) / 3))
+                    energy[start + offset] += train.amplitude * Float(decay)
+                }
+                beatTime += 60 / train.bpm
+            }
+        }
+
+        return energy
     }
 }
 
