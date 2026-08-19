@@ -15,7 +15,9 @@ final class TouchLabView: NSView {
     private var inputTimer: Timer?
     private weak var observedWindow: NSWindow?
 
-    private var crossfader = CrossfaderState.center
+    var crossfaderValue: Float = CrossfaderState.center.value {
+        didSet { needsDisplay = true }
+    }
     private let crossfaderModeValues: [Float] = [0.0, 0.5, 1.0]
 
     // MARK: - Action Callback (set by ViewController)
@@ -272,12 +274,6 @@ final class TouchLabView: NSView {
     private func emit(_ actions: [DJAction]) {
         for action in actions {
             switch action {
-            case .adjustCrossfader(let delta):
-                crossfader = crossfader.nudged(by: delta)
-                needsDisplay = true
-            case .stepCrossfader(let direction):
-                crossfader = crossfader.stepped(toward: direction)
-                needsDisplay = true
             case .adjustFilter(.a, let delta):
                 filterLevelA = max(0, min(1, filterLevelA + delta))
             case .adjustFilter(.b, let delta):
@@ -296,7 +292,9 @@ final class TouchLabView: NSView {
                 scratchRateB = 0
             case .tapBPM(let deck):
                 handleBpmTap(deck: deck)
-            case .load, .togglePlay, .cue, .nudge, .adjustVolume, .setHotCue, .jumpToHotCue:
+            case .load, .togglePlay, .cue, .nudge, .adjustVolume,
+                 .adjustTempo, .resetTempo, .adjustCrossfader, .stepCrossfader,
+                 .setHotCue, .jumpToHotCue:
                 break
             }
             onAction?(action)
@@ -593,7 +591,7 @@ final class TouchLabView: NSView {
         // A / A+B / B mode labels — highlight active mode
         let modeLabels = ["A", "A+B", "B"]
         let crossfaderMode = crossfaderModeValues.enumerated().min {
-            abs($0.element - crossfader.value) < abs($1.element - crossfader.value)
+            abs($0.element - crossfaderValue) < abs($1.element - crossfaderValue)
         }?.offset ?? 1
         let segW = stripRect.width / 3
         for (i, label) in modeLabels.enumerated() {
@@ -617,7 +615,7 @@ final class TouchLabView: NSView {
         }
 
         // Playhead line at exact crossfader position
-        let xPos = stripRect.minX + CGFloat(crossfader.value) * stripRect.width
+        let xPos = stripRect.minX + CGFloat(crossfaderValue) * stripRect.width
         let line = NSBezierPath()
         line.move(to: NSPoint(x: xPos, y: stripRect.minY + 2))
         line.line(to: NSPoint(x: xPos, y: stripRect.maxY - 2))

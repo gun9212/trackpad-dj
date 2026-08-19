@@ -6,8 +6,12 @@ struct CrossfaderState {
     static let center = CrossfaderState(value: 0.5)
     static let step: Float = 0.02
 
+    init(value: Float) {
+        self.value = max(0, min(1, value))
+    }
+
     func nudged(by delta: Float) -> CrossfaderState {
-        CrossfaderState(value: max(0.0, min(1.0, value + delta)))
+        CrossfaderState(value: value + delta)
     }
 
     func stepped(toward direction: Int) -> CrossfaderState {

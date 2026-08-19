@@ -30,6 +30,19 @@ final class InputStateMachineTests: XCTestCase {
         XCTAssertEqual(keyboard.heldActions(), [])
     }
 
+    func testTempoKeysRepeatAtFiveHundredthsPercentAndCancelOpposites() {
+        var keyboard = KeyboardStateMachine()
+
+        XCTAssertEqual(keyboard.keyDown(keyCode: 32, isRepeat: false, shift: false), [])
+        XCTAssertEqual(keyboard.heldActions(), [.adjustTempo(.a, 0.05)])
+
+        XCTAssertEqual(keyboard.keyDown(keyCode: 38, isRepeat: false, shift: false), [])
+        XCTAssertEqual(keyboard.heldActions(), [])
+
+        keyboard.keyUp(keyCode: 32)
+        XCTAssertEqual(keyboard.heldActions(), [.adjustTempo(.a, -0.05)])
+    }
+
     func testDiagonalMotionWaitsForDominanceThenLocksOneAxis() {
         var machine = GestureStateMachine()
         let id = TouchID(rawValue: 1)

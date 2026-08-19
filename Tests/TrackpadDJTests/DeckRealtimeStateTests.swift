@@ -86,4 +86,60 @@ final class DeckRealtimeStateTests: XCTestCase {
         XCTAssertEqual(rendered[4], 0, accuracy: 0.0001)
         XCTAssertEqual(rendered[7], 0, accuracy: 0.0001)
     }
+
+    func testRendererUsesTempoAndReturnsToItAfterScratch() throws {
+        let format = try XCTUnwrap(AVAudioFormat(
+            commonFormat: .pcmFormatFloat32,
+            sampleRate: 8_000,
+            channels: 1,
+            interleaved: false
+        ))
+        let source = try XCTUnwrap(AVAudioPCMBuffer(
+            pcmFormat: format,
+            frameCapacity: 100
+        ))
+        source.frameLength = 100
+        let state = DeckRealtimeState()
+        state.reset(initialPosition: 0)
+        state.setTempoPercent(8)
+        state.setPlaying(true)
+        let renderer = DeckRenderer(
+            audio: DeckAudioData(buffer: source, format: format, preRollFrames: 0),
+            state: state
+        )
+        let output = try XCTUnwrap(AVAudioPCMBuffer(
+            pcmFormat: format,
+            frameCapacity: 10
+        ))
+        output.frameLength = 10
+        var isSilence = ObjCBool(false)
+
+        XCTAssertEqual(renderer.render(
+            isSilence: &isSilence,
+            frameCount: 10,
+            audioBufferList: output.mutableAudioBufferList
+        ), noErr)
+        XCTAssertEqual(state.publicReadPosition, 10.8, accuracy: 0.000_001)
+
+        state.setScratch(active: true, rate: 0)
+        _ = renderer.render(
+            isSilence: &isSilence,
+            frameCount: 10,
+            audioBufferList: output.mutableAudioBufferList
+        )
+        let positionAfterScratch = state.publicReadPosition
+        XCTAssertLessThan(positionAfterScratch, 20.8)
+
+        state.setScratch(active: false, rate: 0)
+        _ = renderer.render(
+            isSilence: &isSilence,
+            frameCount: 10,
+            audioBufferList: output.mutableAudioBufferList
+        )
+        XCTAssertEqual(
+            state.publicReadPosition - positionAfterScratch,
+            10.8,
+            accuracy: 0.000_001
+        )
+    }
 }

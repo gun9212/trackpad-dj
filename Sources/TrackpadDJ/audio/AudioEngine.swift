@@ -38,7 +38,7 @@ final class AudioEngine {
     // Deck channel faders [0, 1]. Combined with crossfader for final volume.
     private(set) var faderA: Float = 1.0
     private(set) var faderB: Float = 1.0
-    private var crossfaderValue: Float = 0.5
+    private(set) var crossfaderValue: Float = 0.5
 
     private func setup(startsAudioEngine: Bool) {
         // Attach stable nodes — these persist across file loads.
@@ -53,6 +53,7 @@ final class AudioEngine {
         engine.connect(_deckA.eqNode, to: main, format: nil)
         engine.connect(_deckB.mixerNode, to: _deckB.eqNode, format: nil)
         engine.connect(_deckB.eqNode, to: main, format: nil)
+        applyVolumes()
 
         if startsAudioEngine {
             do {
@@ -65,7 +66,7 @@ final class AudioEngine {
 
     // MARK: - Crossfader
 
-    /// Linear crossfade: value 0 = full A, 1 = full B.
+    /// Equal-power crossfade: value 0 = full A, 1 = full B.
     func applyCrossfader(_ state: CrossfaderState) {
         crossfaderValue = state.value
         applyVolumes()
@@ -91,9 +92,21 @@ final class AudioEngine {
     }
 
     private func applyVolumes() {
-        let (aGain, bGain) = CrossfaderCurve.scratchStyleGains(at: crossfaderValue)
+        let (aGain, bGain) = CrossfaderCurve.equalPowerGains(at: crossfaderValue)
         _deckA.volume = faderA * aGain
         _deckB.volume = faderB * bGain
+    }
+
+    // MARK: - Tempo
+
+    func adjustTempo(deck: DeckID, by delta: Double) {
+        let target = deck == .a ? _deckA : _deckB
+        target.adjustTempoPercent(by: delta)
+    }
+
+    func resetTempo(deck: DeckID) {
+        let target = deck == .a ? _deckA : _deckB
+        target.resetTempo()
     }
 
     // MARK: - Track Loading

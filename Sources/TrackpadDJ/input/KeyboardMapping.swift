@@ -14,6 +14,8 @@ enum KeyboardMapping {
         case 7: return .cue(.b)              // X
         case 11: return .tapBPM(.a)          // B
         case 45: return .tapBPM(.b)          // N
+        case 23: return .resetTempo(.a)       // 5
+        case 22: return .resetTempo(.b)       // 6
         case 18, 19, 20, 21:                 // 1, 2, 3, 4
             let index = Int(keyCode) - 18
             return shift ? .setHotCue(.a, index) : .jumpToHotCue(.a, index)
@@ -38,6 +40,7 @@ enum KeyboardMapping {
         14, 2, 15, 3,       // Volume: E/D, R/F
         17, 5, 16, 4,       // Filter: T/G, Y/H
         126, 125, 34, 40,   // Nudge: Up/Down, I/K
+        32, 38, 31, 37,     // Tempo: U/J, O/L
     ]
 }
 
@@ -100,7 +103,31 @@ struct KeyboardStateMachine {
             makeAction: { .nudge(.b, $0) },
             to: &actions
         )
+        appendHeldTempoAction(
+            positiveKey: 32, negativeKey: 38,
+            deck: .a,
+            to: &actions
+        )
+        appendHeldTempoAction(
+            positiveKey: 31, negativeKey: 37,
+            deck: .b,
+            to: &actions
+        )
         return actions
+    }
+
+    private func appendHeldTempoAction(
+        positiveKey: UInt16,
+        negativeKey: UInt16,
+        deck: DeckID,
+        to actions: inout [DJAction]
+    ) {
+        let positive = pressedKeys.contains(positiveKey) ? 1.0 : 0.0
+        let negative = pressedKeys.contains(negativeKey) ? 1.0 : 0.0
+        let direction = positive - negative
+        if direction != 0 {
+            actions.append(.adjustTempo(deck, direction * 0.05))
+        }
     }
 
     private func appendHeldAction(

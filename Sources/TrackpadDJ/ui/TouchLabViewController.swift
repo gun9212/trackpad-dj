@@ -42,6 +42,7 @@ final class TouchLabViewController: NSViewController {
         touchLabView.durationB  = audioEngine.deckB.duration
         touchLabView.faderA = audioEngine.faderA
         touchLabView.faderB = audioEngine.faderB
+        touchLabView.crossfaderValue = audioEngine.crossfaderValue
     }
 
     override func viewDidAppear() {
@@ -77,6 +78,10 @@ final class TouchLabViewController: NSViewController {
             audioEngine.setFilter(deck: deck, deltaY: delta)
         case .adjustVolume(let deck, let delta):
             audioEngine.setFader(deck: deck, deltaY: delta)
+        case .adjustTempo(let deck, let delta):
+            audioEngine.adjustTempo(deck: deck, by: delta)
+        case .resetTempo(let deck):
+            audioEngine.resetTempo(deck: deck)
         case .setScratch(let deck, let rate):
             audioEngine.setScratch(deck: deck, rate: rate)
         case .endScratch(let deck):

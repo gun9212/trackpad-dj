@@ -33,6 +33,8 @@ protocol DeckProtocol: AnyObject {
     func setScratch(rate: Double)
     func endScratch()
     func setTempoPercent(_ value: Double)
+    func adjustTempoPercent(by delta: Double)
+    func resetTempo()
     var tempoPercent: Double { get }
 
     // MARK: - Waveform

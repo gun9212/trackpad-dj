@@ -15,20 +15,26 @@ final class ContractTests: XCTestCase {
         XCTAssertEqual(command(7), .cue(.b))
         XCTAssertEqual(command(11), .tapBPM(.a))
         XCTAssertEqual(command(45), .tapBPM(.b))
+        XCTAssertEqual(command(23), .resetTempo(.a))
+        XCTAssertEqual(command(22), .resetTempo(.b))
         XCTAssertEqual(command(18), .jumpToHotCue(.a, 0))
         XCTAssertEqual(command(21, shift: true), .setHotCue(.a, 3))
         XCTAssertEqual(command(26), .jumpToHotCue(.b, 0))
         XCTAssertEqual(command(29, shift: true), .setHotCue(.b, 3))
         XCTAssertTrue(KeyboardMapping.isHeldKey(14))
         XCTAssertTrue(KeyboardMapping.isHeldKey(40))
+        XCTAssertTrue(KeyboardMapping.isHeldKey(32))
+        XCTAssertTrue(KeyboardMapping.isHeldKey(37))
     }
 
-    func testScratchStyleCrossfaderCurve() {
+    func testEqualPowerCrossfaderCurve() {
         assertGains(at: 0, expectedA: 1, expectedB: 0)
-        assertGains(at: 0.25, expectedA: 1, expectedB: 0.5)
-        assertGains(at: 0.5, expectedA: 1, expectedB: 1)
-        assertGains(at: 0.75, expectedA: 0.5, expectedB: 1)
+        assertGains(at: 0.25, expectedA: 0.923_880, expectedB: 0.382_683)
+        assertGains(at: 0.5, expectedA: 0.707_107, expectedB: 0.707_107)
+        assertGains(at: 0.75, expectedA: 0.382_683, expectedB: 0.923_880)
         assertGains(at: 1, expectedA: 0, expectedB: 1)
+        XCTAssertEqual(CrossfaderCurve.equalPowerGains(at: 0).deckB, 0)
+        XCTAssertEqual(CrossfaderCurve.equalPowerGains(at: 1).deckA, 0)
     }
 
     func testBPMTapCalculationAndSequenceReset() {
@@ -50,6 +56,32 @@ final class ContractTests: XCTestCase {
         XCTAssertEqual(ZoneLayout.zone(for: CGPoint(x: 0.75, y: 0.5))?.name, .deckB)
         XCTAssertEqual(ZoneLayout.zone(for: CGPoint(x: 0.5, y: 0.05))?.name, .bottomStrip)
         XCTAssertNil(ZoneLayout.zone(for: CGPoint(x: 1.1, y: 0.5)))
+    }
+
+    @MainActor
+    func testAudioEngineOwnsEqualPowerCrossfaderValue() {
+        let engine = AudioEngine(startsAudioEngine: false)
+
+        XCTAssertEqual(engine.crossfaderValue, 0.5)
+        XCTAssertEqual(engine.deckA.volume, 0.707_107, accuracy: 0.000_001)
+        XCTAssertEqual(engine.deckB.volume, 0.707_107, accuracy: 0.000_001)
+
+        engine.applyCrossfader(CrossfaderState(value: 0))
+        XCTAssertEqual(engine.crossfaderValue, 0)
+        XCTAssertEqual(engine.deckA.volume, 1)
+        XCTAssertEqual(engine.deckB.volume, 0)
+    }
+
+    @MainActor
+    func testAudioEngineTempoControlsClampAndReset() {
+        let engine = AudioEngine(startsAudioEngine: false)
+
+        engine.adjustTempo(deck: .a, by: 20)
+        XCTAssertEqual(engine.deckA.tempoPercent, 8)
+        engine.adjustTempo(deck: .a, by: -0.05)
+        XCTAssertEqual(engine.deckA.tempoPercent, 7.95, accuracy: 0.000_001)
+        engine.resetTempo(deck: .a)
+        XCTAssertEqual(engine.deckA.tempoPercent, 0)
     }
 
     @MainActor
@@ -78,7 +110,7 @@ final class ContractTests: XCTestCase {
         file: StaticString = #filePath,
         line: UInt = #line
     ) {
-        let gains = CrossfaderCurve.scratchStyleGains(at: value)
+        let gains = CrossfaderCurve.equalPowerGains(at: value)
         XCTAssertEqual(gains.deckA, expectedA, accuracy: 0.0001, file: file, line: line)
         XCTAssertEqual(gains.deckB, expectedB, accuracy: 0.0001, file: file, line: line)
     }

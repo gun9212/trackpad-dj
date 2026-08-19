@@ -243,4 +243,12 @@ final class Deck: DeckProtocol {
         realtimeState.setTempoPercent(value)
     }
 
+    func adjustTempoPercent(by delta: Double) {
+        setTempoPercent(tempoPercent + delta)
+    }
+
+    func resetTempo() {
+        setTempoPercent(0)
+    }
+
 }
