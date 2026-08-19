@@ -38,8 +38,6 @@ final class TouchLabView: NSView {
     private var lastMeterUpdate = CACurrentMediaTime()
     private var activeDeckTransitionStartedAt: TimeInterval?
 
-    private let crossfaderModeValues: [Float] = [0, 0.5, 1]
-
     var onAction: ((DJAction) -> Void)?
 
     private(set) var deckASnapshot = DeckSnapshot.empty(deck: .a)
@@ -383,7 +381,7 @@ final class TouchLabView: NSView {
                 cancelJogAndUnlock()
             case .load:
                 restoreCursor()
-            case .adjustCrossfader, .stepCrossfader, .togglePlay, .cue, .nudge,
+            case .stepCrossfader, .togglePlay, .cue, .nudge,
                  .adjustFilter, .adjustVolume, .adjustTempo, .resetTempo,
                  .toggleMonitor, .toggleOutputMode, .tapBPM,
                  .restoreAutomaticBPM, .syncTempo:
@@ -1205,43 +1203,41 @@ final class TouchLabView: NSView {
 
     private func drawCrossfader(in rect: NSRect) {
         drawText(
-            "CROSSFADER",
+            "CROSSFADER · GATE",
             in: NSRect(x: rect.minX, y: rect.maxY - 11, width: rect.width, height: 10),
             font: .monospacedSystemFont(ofSize: 7, weight: .bold),
             color: ConsolePalette.secondaryText,
             alignment: .center
         )
-        let track = NSRect(x: rect.minX + 12, y: rect.minY + 11, width: rect.width - 24, height: 5)
-        ConsolePalette.deckA.withAlphaComponent(0.55).setFill()
-        NSRect(x: track.minX, y: track.minY, width: track.width / 2, height: track.height).fill()
-        ConsolePalette.deckB.withAlphaComponent(0.55).setFill()
-        NSRect(x: track.midX, y: track.minY, width: track.width / 2, height: track.height).fill()
-        for value in crossfaderModeValues {
-            let x = track.minX + CGFloat(value) * track.width
-            ConsolePalette.primaryText.withAlphaComponent(0.35).setFill()
-            NSRect(x: x - 0.5, y: track.minY - 3, width: 1, height: track.height + 6).fill()
+        let selected = CrossfaderState(rawValue: mixerSnapshot.crossfaderValue) ?? .both
+        let labels = ["A ON", "A+B ON", "B ON"]
+        let colors = [ConsolePalette.deckA, ConsolePalette.primaryText, ConsolePalette.deckB]
+        let gap: CGFloat = 3
+        let segmentWidth = (rect.width - gap * 2) / 3
+
+        for (index, state) in CrossfaderState.allCases.enumerated() {
+            let segment = NSRect(
+                x: rect.minX + CGFloat(index) * (segmentWidth + gap),
+                y: rect.minY + 2,
+                width: segmentWidth,
+                height: 22
+            )
+            let isSelected = state == selected
+            let color = colors[index]
+            let path = NSBezierPath(roundedRect: segment, xRadius: 4, yRadius: 4)
+            (isSelected ? color.withAlphaComponent(0.28) : ConsolePalette.raised.withAlphaComponent(0.45)).setFill()
+            path.fill()
+            (isSelected ? color : ConsolePalette.divider).setStroke()
+            path.lineWidth = 1
+            path.stroke()
+            drawText(
+                labels[index],
+                in: segment.insetBy(dx: 2, dy: 5),
+                font: .monospacedSystemFont(ofSize: 8, weight: .bold),
+                color: isSelected ? color : ConsolePalette.secondaryText,
+                alignment: .center
+            )
         }
-        let knobX = track.minX + CGFloat(mixerSnapshot.crossfaderValue) * track.width
-        ConsolePalette.primaryText.setFill()
-        NSBezierPath(roundedRect: NSRect(
-            x: knobX - 8,
-            y: track.midY - 9,
-            width: 16,
-            height: 18
-        ), xRadius: 4, yRadius: 4).fill()
-        drawText(
-            "A",
-            in: NSRect(x: rect.minX, y: rect.minY + 5, width: 12, height: 11),
-            font: .monospacedSystemFont(ofSize: 8, weight: .bold),
-            color: ConsolePalette.deckA
-        )
-        drawText(
-            "B",
-            in: NSRect(x: rect.maxX - 12, y: rect.minY + 5, width: 12, height: 11),
-            font: .monospacedSystemFont(ofSize: 8, weight: .bold),
-            color: ConsolePalette.deckB,
-            alignment: .right
-        )
     }
 
     private func drawBottomRail(_ rect: NSRect) {

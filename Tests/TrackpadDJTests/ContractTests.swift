@@ -38,14 +38,17 @@ final class ContractTests: XCTestCase {
         XCTAssertTrue(KeyboardMapping.isHeldKey(125))
     }
 
-    func testEqualPowerCrossfaderCurve() {
-        assertGains(at: 0, expectedA: 1, expectedB: 0)
-        assertGains(at: 0.25, expectedA: 0.923_880, expectedB: 0.382_683)
-        assertGains(at: 0.5, expectedA: 0.707_107, expectedB: 0.707_107)
-        assertGains(at: 0.75, expectedA: 0.382_683, expectedB: 0.923_880)
-        assertGains(at: 1, expectedA: 0, expectedB: 1)
-        XCTAssertEqual(CrossfaderCurve.equalPowerGains(at: 0).deckB, 0)
-        XCTAssertEqual(CrossfaderCurve.equalPowerGains(at: 1).deckA, 0)
+    func testThreePositionCrossfaderGate() {
+        assertGains(for: .deckAOnly, expectedA: 1, expectedB: 0)
+        assertGains(for: .both, expectedA: 1, expectedB: 1)
+        assertGains(for: .deckBOnly, expectedA: 0, expectedB: 1)
+
+        XCTAssertEqual(CrossfaderState.deckAOnly.stepped(toward: 1), .both)
+        XCTAssertEqual(CrossfaderState.both.stepped(toward: 1), .deckBOnly)
+        XCTAssertEqual(CrossfaderState.deckBOnly.stepped(toward: -1), .both)
+        XCTAssertEqual(CrossfaderState.both.stepped(toward: -1), .deckAOnly)
+        XCTAssertEqual(CrossfaderState.deckAOnly.stepped(toward: -1), .deckAOnly)
+        XCTAssertEqual(CrossfaderState.deckBOnly.stepped(toward: 1), .deckBOnly)
     }
 
     func testBPMTapCalculationAndSequenceReset() {
@@ -62,17 +65,26 @@ final class ContractTests: XCTestCase {
     }
 
     @MainActor
-    func testAudioEngineOwnsEqualPowerCrossfaderValue() {
+    func testAudioEngineAppliesCrossfaderAsAnOutputGate() {
         let engine = AudioEngine(startsAudioEngine: false)
 
         XCTAssertEqual(engine.crossfaderValue, 0.5)
-        XCTAssertEqual(engine.deckA.volume, 0.707_107, accuracy: 0.000_001)
-        XCTAssertEqual(engine.deckB.volume, 0.707_107, accuracy: 0.000_001)
+        XCTAssertEqual(engine.deckA.volume, 1)
+        XCTAssertEqual(engine.deckB.volume, 1)
 
-        engine.applyCrossfader(CrossfaderState(value: 0))
+        engine.applyCrossfader(.deckAOnly)
         XCTAssertEqual(engine.crossfaderValue, 0)
         XCTAssertEqual(engine.deckA.volume, 1)
         XCTAssertEqual(engine.deckB.volume, 0)
+
+        engine.setFader(deck: .a, deltaY: -0.25)
+        engine.applyCrossfader(.both)
+        XCTAssertEqual(engine.deckA.volume, 0.75)
+        XCTAssertEqual(engine.deckB.volume, 1)
+
+        engine.applyCrossfader(.deckBOnly)
+        XCTAssertEqual(engine.deckA.volume, 0)
+        XCTAssertEqual(engine.deckB.volume, 1)
     }
 
     @MainActor
@@ -115,13 +127,13 @@ final class ContractTests: XCTestCase {
     }
 
     private func assertGains(
-        at value: Float,
+        for state: CrossfaderState,
         expectedA: Float,
         expectedB: Float,
         file: StaticString = #filePath,
         line: UInt = #line
     ) {
-        let gains = CrossfaderCurve.equalPowerGains(at: value)
+        let gains = CrossfaderGate.gains(for: state)
         XCTAssertEqual(gains.deckA, expectedA, accuracy: 0.0001, file: file, line: line)
         XCTAssertEqual(gains.deckB, expectedB, accuracy: 0.0001, file: file, line: line)
     }

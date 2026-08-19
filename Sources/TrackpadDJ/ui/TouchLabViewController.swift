@@ -70,8 +70,6 @@ final class TouchLabViewController: NSViewController {
         switch action {
         case .selectActiveDeck:
             break
-        case .adjustCrossfader(let delta):
-            audioEngine.adjustCrossfader(by: delta)
         case .stepCrossfader(let direction):
             audioEngine.stepCrossfader(toward: direction)
         case .load(let deck):
