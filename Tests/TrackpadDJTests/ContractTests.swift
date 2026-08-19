@@ -53,12 +53,13 @@ final class ContractTests: XCTestCase {
     }
 
     @MainActor
-    func testRuntimeWAVFixtureLoadsIntoDeck() throws {
+    func testRuntimeWAVFixtureLoadsIntoDeck() async throws {
         let fixture = try RuntimeWAVFixture(duration: 0.1, sampleRate: 8_000, channels: 2)
         addTeardownBlock { fixture.remove() }
 
+        let track = try await TrackLoader().load(url: fixture.url)
         let deck = Deck()
-        try deck.load(url: fixture.url)
+        deck.install(track)
 
         XCTAssertEqual(deck.trackName, fixture.url.deletingPathExtension().lastPathComponent)
         XCTAssertEqual(deck.duration, 0.1, accuracy: 0.001)

@@ -5,6 +5,11 @@ import AVFoundation
 @MainActor
 final class AudioEngine {
 
+    enum TrackLoadResult: Equatable {
+        case installed
+        case superseded
+    }
+
     // Public protocol interface — ViewController and View depend only on this.
     var deckA: any DeckProtocol { _deckA }
     var deckB: any DeckProtocol { _deckB }
@@ -14,9 +19,14 @@ final class AudioEngine {
     private let _deckB = Deck()
 
     private let engine = AVAudioEngine()
+    private let trackLoadCoordinator: TrackLoadCoordinator
 
-    init() {
-        setup()
+    init(
+        trackLoader: any TrackLoading = TrackLoader(),
+        startsAudioEngine: Bool = true
+    ) {
+        trackLoadCoordinator = TrackLoadCoordinator(loader: trackLoader)
+        setup(startsAudioEngine: startsAudioEngine)
     }
 
     // MARK: - Setup
@@ -30,7 +40,7 @@ final class AudioEngine {
     private(set) var faderB: Float = 1.0
     private var crossfaderValue: Float = 0.5
 
-    private func setup() {
+    private func setup(startsAudioEngine: Bool) {
         // Attach stable nodes — these persist across file loads.
         // Signal chain: sourceNode → mixerNode → eqNode → mainMixerNode
         engine.attach(_deckA.mixerNode)
@@ -44,10 +54,12 @@ final class AudioEngine {
         engine.connect(_deckB.mixerNode, to: _deckB.eqNode, format: nil)
         engine.connect(_deckB.eqNode, to: main, format: nil)
 
-        do {
-            try engine.start()
-        } catch {
-            print("AudioEngine: failed to start — \(error)")
+        if startsAudioEngine {
+            do {
+                try engine.start()
+            } catch {
+                print("AudioEngine: failed to start — \(error)")
+            }
         }
     }
 
@@ -86,20 +98,24 @@ final class AudioEngine {
 
     // MARK: - Track Loading
 
-    func loadTrack(url: URL, deck: DeckID) throws {
-        let d = deck == .a ? _deckA : _deckB
+    func loadTrack(url: URL, deck: DeckID) async throws -> TrackLoadResult {
+        switch try await trackLoadCoordinator.load(url: url, deck: deck) {
+        case .superseded:
+            return .superseded
+        case .ready(let track):
+            let d = deck == .a ? _deckA : _deckB
+            let oldSource = d.sourceNode
+            d.install(track)
 
-        // Detach old sourceNode before creating a new one.
-        if let old = d.sourceNode {
-            engine.detach(old)
-        }
-
-        try d.load(url: url)
-
-        // Attach new sourceNode and wire it into the stable mixerNode.
-        if let src = d.sourceNode, let format = d.processingFormat {
+            if let oldSource {
+                engine.detach(oldSource)
+            }
+            guard let src = d.sourceNode, let format = d.processingFormat else {
+                return .installed
+            }
             engine.attach(src)
             engine.connect(src, to: d.mixerNode, format: format)
+            return .installed
         }
     }
 

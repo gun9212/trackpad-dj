@@ -1,9 +1,5 @@
 import AVFoundation
 
-enum DeckError: Error {
-    case bufferAllocationFailed
-}
-
 /// Immutable PCM data captured by exactly one source-node renderer.
 final class DeckAudioData: @unchecked Sendable {
     let buffer: AVAudioPCMBuffer
@@ -162,7 +158,7 @@ final class Deck: DeckProtocol {
     private(set) var trackName: String?
     private(set) var waveformSamples: [Float] = []
 
-    private let realtimeState = DeckRealtimeState()
+    private var realtimeState = DeckRealtimeState()
     private var audioData: DeckAudioData?
     private var renderer: DeckRenderer?
 
@@ -194,30 +190,18 @@ final class Deck: DeckProtocol {
         realtimeState.tempoPercent
     }
 
-    func load(url: URL) throws {
-        let file = try AVAudioFile(forReading: url)
-        let format = file.processingFormat
-        let frameCount = AVAudioFrameCount(file.length)
+    func install(_ track: LoadedTrack) {
+        let state = DeckRealtimeState()
+        state.reset(initialPosition: -track.audio.preRollFrames)
+        let renderer = DeckRenderer(audio: track.audio, state: state)
 
-        guard let buffer = AVAudioPCMBuffer(pcmFormat: format, frameCapacity: frameCount) else {
-            throw DeckError.bufferAllocationFailed
-        }
-        try file.read(into: buffer)
-
-        let data = DeckAudioData(
-            buffer: buffer,
-            format: format,
-            preRollFrames: format.sampleRate * 2
-        )
-        realtimeState.reset(initialPosition: -data.preRollFrames)
-        let renderer = DeckRenderer(audio: data, state: realtimeState)
-
-        trackName = file.url.deletingPathExtension().lastPathComponent
-        processingFormat = format
-        waveformSamples = Self.downsample(buffer, targetCount: 800)
-        audioData = data
+        realtimeState = state
+        trackName = track.name
+        processingFormat = track.audio.format
+        waveformSamples = track.waveformSamples
+        audioData = track.audio
         self.renderer = renderer
-        sourceNode = AVAudioSourceNode(format: format) { isSilence, _, frameCount, buffers in
+        sourceNode = AVAudioSourceNode(format: track.audio.format) { isSilence, _, frameCount, buffers in
             renderer.render(
                 isSilence: isSilence,
                 frameCount: frameCount,
@@ -259,26 +243,4 @@ final class Deck: DeckProtocol {
         realtimeState.setTempoPercent(value)
     }
 
-    private static func downsample(_ buffer: AVAudioPCMBuffer, targetCount: Int) -> [Float] {
-        guard let channelData = buffer.floatChannelData else { return [] }
-        let totalFrames = Int(buffer.frameLength)
-        let channelCount = Int(buffer.format.channelCount)
-        guard totalFrames > 0, targetCount > 0 else { return [] }
-
-        let chunkSize = max(1, totalFrames / targetCount)
-        var result = [Float](repeating: 0, count: targetCount)
-
-        for index in 0..<targetCount {
-            let start = index * chunkSize
-            let end = min(start + chunkSize, totalFrames)
-            var peak: Float = 0
-            for frame in start..<end {
-                for channel in 0..<channelCount {
-                    peak = max(peak, abs(channelData[channel][frame]))
-                }
-            }
-            result[index] = peak
-        }
-        return result
-    }
 }

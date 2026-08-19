@@ -18,7 +18,7 @@ protocol DeckProtocol: AnyObject {
 
     // MARK: - Transport
 
-    func load(url: URL) throws
+    func install(_ track: LoadedTrack)
     func togglePlayPause()
     func cue()
 

@@ -26,6 +26,7 @@ final class TouchLabView: NSView {
 
     var deckALabel: String = "A: —" { didSet { needsDisplay = true } }
     var deckBLabel: String = "B: —" { didSet { needsDisplay = true } }
+    var statusMessage: String? { didSet { needsDisplay = true } }
 
     // MARK: - Waveform Data (updated by ViewController)
 
@@ -148,6 +149,22 @@ final class TouchLabView: NSView {
             bpmTapA.tap(at: now, progress: extendedProgressA)
         case .b:
             bpmTapB.tap(at: now, progress: extendedProgressB)
+        }
+        needsDisplay = true
+    }
+
+    func resetTransientState(for deck: DeckID) {
+        switch deck {
+        case .a:
+            bpmTapA.reset()
+            hotCuesA = Array(repeating: nil, count: 4)
+            scratchRateA = 0
+            isScratchActiveA = false
+        case .b:
+            bpmTapB.reset()
+            hotCuesB = Array(repeating: nil, count: 4)
+            scratchRateB = 0
+            isScratchActiveB = false
         }
         needsDisplay = true
     }
@@ -516,6 +533,18 @@ final class TouchLabView: NSView {
         let hintStr = NSAttributedString(string: hint, attributes: hintAttrs)
         let hintX = (bounds.width - hintStr.size().width) / 2
         hintStr.draw(at: NSPoint(x: hintX, y: 8))
+
+        if let statusMessage {
+            let statusAttrs: [NSAttributedString.Key: Any] = [
+                .foregroundColor: NSColor.systemYellow.withAlphaComponent(0.9),
+                .font: NSFont.monospacedSystemFont(ofSize: 11, weight: .medium),
+            ]
+            let status = NSAttributedString(string: statusMessage, attributes: statusAttrs)
+            status.draw(at: NSPoint(
+                x: (bounds.width - status.size().width) / 2,
+                y: 24
+            ))
+        }
     }
 
     private func drawFaders() {

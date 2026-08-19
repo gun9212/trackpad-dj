@@ -8,6 +8,7 @@ final class TouchLabViewController: NSViewController {
     private var touchLabView: TouchLabView!
     private let audioEngine = AudioEngine()
     private var displayTimer: Timer?
+    private var loadStatusByDeck: [DeckID: String] = [:]
 
     override func loadView() {
         touchLabView = TouchLabView(frame: NSRect(x: 0, y: 0, width: 900, height: 600))
@@ -95,15 +96,38 @@ final class TouchLabViewController: NSViewController {
 
         panel.begin { [weak self] response in
             guard response == .OK, let url = panel.url, let self = self else { return }
-            do {
-                try self.audioEngine.loadTrack(url: url, deck: deckID)
-                DispatchQueue.main.async {
+            self.setLoadStatus(
+                "Loading Deck \(deckID == .a ? "A" : "B")…",
+                for: deckID
+            )
+
+            Task { @MainActor [weak self] in
+                guard let self else { return }
+                do {
+                    let result = try await self.audioEngine.loadTrack(url: url, deck: deckID)
+                    guard result == .installed else { return }
+                    self.touchLabView.resetTransientState(for: deckID)
                     self.refreshDeckLabels()
                     self.refreshWaveform(deck: deckID)
+                    self.refreshPlayheads()
+                    self.setLoadStatus(nil, for: deckID)
+                } catch {
+                    self.setLoadStatus(
+                        "Deck \(deckID == .a ? "A" : "B") failed: \(error.localizedDescription)",
+                        for: deckID
+                    )
                 }
-            } catch {
-                print("Load error: \(error)")
             }
+        }
+    }
+
+    private func setLoadStatus(_ status: String?, for deck: DeckID) {
+        loadStatusByDeck[deck] = status
+        touchLabView.statusMessage = [DeckID.a, .b]
+            .compactMap { loadStatusByDeck[$0] }
+            .joined(separator: "   |   ")
+        if touchLabView.statusMessage?.isEmpty == true {
+            touchLabView.statusMessage = nil
         }
     }
 
