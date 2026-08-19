@@ -10,6 +10,14 @@ struct CrossfaderState {
         CrossfaderState(value: max(0.0, min(1.0, value + delta)))
     }
 
+    func stepped(toward direction: Int) -> CrossfaderState {
+        guard direction != 0 else { return self }
+        if direction < 0 {
+            return CrossfaderState(value: value > 0.5 ? 0.5 : 0.0)
+        }
+        return CrossfaderState(value: value < 0.5 ? 0.5 : 1.0)
+    }
+
     func snapped(to end: End) -> CrossfaderState {
         CrossfaderState(value: end == .deckA ? 0.0 : 1.0)
     }

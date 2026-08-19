@@ -3,7 +3,7 @@ import CoreGraphics
 /// A named region of the trackpad surface in normalized [0, 1] × [0, 1] space.
 struct Zone {
 
-    enum Name: String, CaseIterable {
+    enum Name: String, CaseIterable, Sendable {
         case topStrip    = "Browse"
         case deckA       = "Deck A"
         case deckB       = "Deck B"

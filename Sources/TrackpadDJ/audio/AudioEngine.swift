@@ -4,8 +4,6 @@ import AVFoundation
 /// Signal chain: player → mainMixerNode (reconnected with file format on load)
 final class AudioEngine {
 
-    enum DeckID: Equatable { case a, b }
-
     // Public protocol interface — ViewController and View depend only on this.
     var deckA: any DeckProtocol { _deckA }
     var deckB: any DeckProtocol { _deckB }
@@ -58,6 +56,14 @@ final class AudioEngine {
     func applyCrossfader(_ state: CrossfaderState) {
         crossfaderValue = state.value
         applyVolumes()
+    }
+
+    func adjustCrossfader(by delta: Float) {
+        applyCrossfader(CrossfaderState(value: crossfaderValue).nudged(by: delta))
+    }
+
+    func stepCrossfader(toward direction: Int) {
+        applyCrossfader(CrossfaderState(value: crossfaderValue).stepped(toward: direction))
     }
 
     // MARK: - Channel Faders

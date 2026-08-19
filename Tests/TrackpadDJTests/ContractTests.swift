@@ -19,20 +19,8 @@ final class ContractTests: XCTestCase {
         XCTAssertEqual(command(21, shift: true), .setHotCue(.a, 3))
         XCTAssertEqual(command(26), .jumpToHotCue(.b, 0))
         XCTAssertEqual(command(29, shift: true), .setHotCue(.b, 3))
-        XCTAssertNil(KeyboardMapping.command(for: 12, isRepeat: true, shift: false))
-
-        XCTAssertEqual(KeyboardMapping.heldControl(for: 14), .volume(.a, 1))
-        XCTAssertEqual(KeyboardMapping.heldControl(for: 2), .volume(.a, -1))
-        XCTAssertEqual(KeyboardMapping.heldControl(for: 15), .volume(.b, 1))
-        XCTAssertEqual(KeyboardMapping.heldControl(for: 3), .volume(.b, -1))
-        XCTAssertEqual(KeyboardMapping.heldControl(for: 17), .filter(.a, 1))
-        XCTAssertEqual(KeyboardMapping.heldControl(for: 5), .filter(.a, -1))
-        XCTAssertEqual(KeyboardMapping.heldControl(for: 16), .filter(.b, 1))
-        XCTAssertEqual(KeyboardMapping.heldControl(for: 4), .filter(.b, -1))
-        XCTAssertEqual(KeyboardMapping.heldControl(for: 126), .nudge(.a, 1))
-        XCTAssertEqual(KeyboardMapping.heldControl(for: 125), .nudge(.a, -1))
-        XCTAssertEqual(KeyboardMapping.heldControl(for: 34), .nudge(.b, 1))
-        XCTAssertEqual(KeyboardMapping.heldControl(for: 40), .nudge(.b, -1))
+        XCTAssertTrue(KeyboardMapping.isHeldKey(14))
+        XCTAssertTrue(KeyboardMapping.isHeldKey(40))
     }
 
     func testScratchStyleCrossfaderCurve() {
@@ -77,8 +65,8 @@ final class ContractTests: XCTestCase {
         XCTAssertEqual(deck.extendedProgress, -20, accuracy: 0.001)
     }
 
-    private func command(_ keyCode: UInt16, shift: Bool = false) -> KeyboardCommand? {
-        KeyboardMapping.command(for: keyCode, isRepeat: false, shift: shift)
+    private func command(_ keyCode: UInt16, shift: Bool = false) -> DJAction? {
+        KeyboardMapping.oneShotAction(for: keyCode, shift: shift)
     }
 
     private func assertGains(

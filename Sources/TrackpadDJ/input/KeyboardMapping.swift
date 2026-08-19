@@ -1,30 +1,8 @@
 import Foundation
 
-enum KeyboardCommand: Equatable {
-    case stepCrossfader(Int)
-    case load(AudioEngine.DeckID)
-    case togglePlay(AudioEngine.DeckID)
-    case cue(AudioEngine.DeckID)
-    case tapBPM(AudioEngine.DeckID)
-    case setHotCue(AudioEngine.DeckID, Int)
-    case jumpToHotCue(AudioEngine.DeckID, Int)
-}
-
-enum HeldKeyboardControl: Equatable {
-    case volume(AudioEngine.DeckID, Float)
-    case filter(AudioEngine.DeckID, Float)
-    case nudge(AudioEngine.DeckID, Float)
-}
-
 enum KeyboardMapping {
 
-    static func command(
-        for keyCode: UInt16,
-        isRepeat: Bool,
-        shift: Bool
-    ) -> KeyboardCommand? {
-        guard !isRepeat else { return nil }
-
+    static func oneShotAction(for keyCode: UInt16, shift: Bool) -> DJAction? {
         switch keyCode {
         case 123: return .stepCrossfader(-1) // Left arrow
         case 124: return .stepCrossfader(1)  // Right arrow
@@ -48,21 +26,95 @@ enum KeyboardMapping {
         }
     }
 
-    static func heldControl(for keyCode: UInt16) -> HeldKeyboardControl? {
-        switch keyCode {
-        case 14: return .volume(.a, 1)  // E
-        case 2: return .volume(.a, -1)  // D
-        case 15: return .volume(.b, 1)  // R
-        case 3: return .volume(.b, -1)  // F
-        case 17: return .filter(.a, 1)  // T
-        case 5: return .filter(.a, -1)  // G
-        case 16: return .filter(.b, 1)  // Y
-        case 4: return .filter(.b, -1)  // H
-        case 126: return .nudge(.a, 1)  // Up arrow
-        case 125: return .nudge(.a, -1) // Down arrow
-        case 34: return .nudge(.b, 1)   // I
-        case 40: return .nudge(.b, -1)  // K
-        default: return nil
+    static func isHeldKey(_ keyCode: UInt16) -> Bool {
+        heldKeyCodes.contains(keyCode)
+    }
+
+    static func handles(_ keyCode: UInt16, shift: Bool) -> Bool {
+        oneShotAction(for: keyCode, shift: shift) != nil || isHeldKey(keyCode)
+    }
+
+    private static let heldKeyCodes: Set<UInt16> = [
+        14, 2, 15, 3,       // Volume: E/D, R/F
+        17, 5, 16, 4,       // Filter: T/G, Y/H
+        126, 125, 34, 40,   // Nudge: Up/Down, I/K
+    ]
+}
+
+struct KeyboardStateMachine {
+
+    private(set) var pressedKeys: Set<UInt16> = []
+
+    mutating func keyDown(keyCode: UInt16, isRepeat: Bool, shift: Bool) -> [DJAction] {
+        let oneShot = KeyboardMapping.oneShotAction(for: keyCode, shift: shift)
+        guard oneShot != nil || KeyboardMapping.isHeldKey(keyCode) else { return [] }
+
+        let inserted = pressedKeys.insert(keyCode).inserted
+        guard inserted, !isRepeat, let oneShot else { return [] }
+        return [oneShot]
+    }
+
+    mutating func keyUp(keyCode: UInt16) {
+        pressedKeys.remove(keyCode)
+    }
+
+    mutating func focusLost() {
+        pressedKeys.removeAll(keepingCapacity: true)
+    }
+
+    func heldActions() -> [DJAction] {
+        var actions: [DJAction] = []
+        appendHeldAction(
+            positiveKey: 14, negativeKey: 2,
+            scale: 0.008,
+            makeAction: { .adjustVolume(.a, $0) },
+            to: &actions
+        )
+        appendHeldAction(
+            positiveKey: 15, negativeKey: 3,
+            scale: 0.008,
+            makeAction: { .adjustVolume(.b, $0) },
+            to: &actions
+        )
+        appendHeldAction(
+            positiveKey: 17, negativeKey: 5,
+            scale: 0.003,
+            makeAction: { .adjustFilter(.a, $0) },
+            to: &actions
+        )
+        appendHeldAction(
+            positiveKey: 16, negativeKey: 4,
+            scale: 0.003,
+            makeAction: { .adjustFilter(.b, $0) },
+            to: &actions
+        )
+        appendHeldAction(
+            positiveKey: 126, negativeKey: 125,
+            scale: 0.001,
+            makeAction: { .nudge(.a, $0) },
+            to: &actions
+        )
+        appendHeldAction(
+            positiveKey: 34, negativeKey: 40,
+            scale: 0.001,
+            makeAction: { .nudge(.b, $0) },
+            to: &actions
+        )
+        return actions
+    }
+
+    private func appendHeldAction(
+        positiveKey: UInt16,
+        negativeKey: UInt16,
+        scale: Float,
+        makeAction: (Float) -> DJAction,
+        to actions: inout [DJAction]
+    ) {
+        let positive: Float = pressedKeys.contains(positiveKey) ? 1 : 0
+        let negative: Float = pressedKeys.contains(negativeKey) ? 1 : 0
+        let direction = positive - negative
+        if direction != 0 {
+            actions.append(makeAction(direction * scale))
         }
     }
 }

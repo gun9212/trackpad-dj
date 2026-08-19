@@ -42,50 +42,43 @@ final class TouchLabViewController: NSViewController {
     // MARK: - Wiring
 
     private func wireCallbacks() {
-        touchLabView.onCrossfaderChanged = { [weak self] state in
-            self?.audioEngine.applyCrossfader(state)
+        touchLabView.onAction = { [weak self] action in
+            self?.handle(action)
         }
+    }
 
-        touchLabView.onLoadDeck = { [weak self] deckID in
-            self?.presentOpenPanel(for: deckID)
-        }
-
-        touchLabView.onTogglePlay = { [weak self] deckID in
-            self?.audioEngine.togglePlayPause(deck: deckID)
-            self?.refreshDeckLabels()
-        }
-
-        touchLabView.onCue = { [weak self] deckID in
-            self?.audioEngine.cue(deck: deckID)
-            self?.refreshDeckLabels()
-        }
-
-        touchLabView.onNudge = { [weak self] deckID, deltaX in
-            self?.audioEngine.scrub(deck: deckID, deltaX: deltaX)
-        }
-
-        touchLabView.onNudgeEnd = { _ in }  // no-op: seek-based scrub needs no reset
-
-        touchLabView.onScratch = { [weak self] deckID, rate in
-            self?.audioEngine.setScratch(deck: deckID, rate: rate)
-        }
-
-        touchLabView.onScratchEnd = { [weak self] deckID in
-            self?.audioEngine.endScratch(deck: deckID)
-        }
-
-        touchLabView.onFilter = { [weak self] deckID, deltaY in
-            self?.audioEngine.setFilter(deck: deckID, deltaY: deltaY)
-        }
-
-        touchLabView.onVolume = { [weak self] deckID, deltaY in
-            self?.audioEngine.setFader(deck: deckID, deltaY: deltaY)
+    private func handle(_ action: DJAction) {
+        switch action {
+        case .adjustCrossfader(let delta):
+            audioEngine.adjustCrossfader(by: delta)
+        case .stepCrossfader(let direction):
+            audioEngine.stepCrossfader(toward: direction)
+        case .load(let deck):
+            presentOpenPanel(for: deck)
+        case .togglePlay(let deck):
+            audioEngine.togglePlayPause(deck: deck)
+            refreshDeckLabels()
+        case .cue(let deck):
+            audioEngine.cue(deck: deck)
+            refreshDeckLabels()
+        case .nudge(let deck, let delta):
+            audioEngine.scrub(deck: deck, deltaX: delta)
+        case .adjustFilter(let deck, let delta):
+            audioEngine.setFilter(deck: deck, deltaY: delta)
+        case .adjustVolume(let deck, let delta):
+            audioEngine.setFader(deck: deck, deltaY: delta)
+        case .setScratch(let deck, let rate):
+            audioEngine.setScratch(deck: deck, rate: rate)
+        case .endScratch(let deck):
+            audioEngine.endScratch(deck: deck)
+        case .tapBPM, .setHotCue, .jumpToHotCue:
+            break
         }
     }
 
     // MARK: - File Loading
 
-    private func presentOpenPanel(for deckID: AudioEngine.DeckID) {
+    private func presentOpenPanel(for deckID: DeckID) {
         let panel = NSOpenPanel()
         panel.allowedContentTypes = [.audio]
         panel.allowsMultipleSelection = false
@@ -107,7 +100,7 @@ final class TouchLabViewController: NSViewController {
 
     // MARK: - HUD Updates
 
-    private func refreshWaveform(deck: AudioEngine.DeckID) {
+    private func refreshWaveform(deck: DeckID) {
         switch deck {
         case .a: touchLabView.waveformA = audioEngine.deckA.waveformSamples
         case .b: touchLabView.waveformB = audioEngine.deckB.waveformSamples

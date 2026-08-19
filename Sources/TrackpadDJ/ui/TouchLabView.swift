@@ -3,43 +3,23 @@ import AppKit
 /// Renders the Touch Lab: zone boundaries and live touch point visualization.
 final class TouchLabView: NSView {
 
-    var session: TouchSession = .empty {
+    private(set) var session: TouchSession = .empty {
         didSet { needsDisplay = true }
     }
 
+    private var gestureStateMachine = GestureStateMachine()
+    private var keyboardStateMachine = KeyboardStateMachine()
+    private var touchIDs: [NSObject: TouchID] = [:]
+    private var nextTouchID: UInt64 = 1
+    private var inputTimer: Timer?
+    private weak var observedWindow: NSWindow?
+
     private var crossfader = CrossfaderState.center
-    private var crossfaderMode: Int = 1                          // 0=A, 1=both, 2=B
     private let crossfaderModeValues: [Float] = [0.0, 0.5, 1.0]
 
-    // Key hold directions: -1, 0, +1  (driven by 60fps timer)
-    private var volumeKeyA: Float = 0
-    private var volumeKeyB: Float = 0
-    private var filterKeyA: Float = 0
-    private var filterKeyB: Float = 0
-    private var nudgeKeyA:  Float = 0
-    private var nudgeKeyB:  Float = 0
+    // MARK: - Action Callback (set by ViewController)
 
-    // MARK: - Audio Callbacks (set by ViewController)
-
-    var onCrossfaderChanged: ((CrossfaderState) -> Void)?
-    var onLoadDeck: ((AudioEngine.DeckID) -> Void)?
-    var onTogglePlay: ((AudioEngine.DeckID) -> Void)?
-    var onCue: ((AudioEngine.DeckID) -> Void)?
-    /// deltaX: normalized horizontal movement per event (positive = right)
-    var onNudge: ((AudioEngine.DeckID, Float) -> Void)?
-    var onNudgeEnd: ((AudioEngine.DeckID) -> Void)?
-    /// deltaY: normalized vertical movement per event (positive = up = open filter)
-    var onFilter: ((AudioEngine.DeckID, Float) -> Void)?
-    /// deltaY: normalized vertical movement per event (positive = up = louder)
-    var onVolume: ((AudioEngine.DeckID, Float) -> Void)?
-    /// rate: playback rate (1.0 = normal, negative = reverse, 0 = freeze). Called on 1-finger touch in deck zone.
-    var onScratch: ((AudioEngine.DeckID, Double) -> Void)?
-    /// Called when all fingers lift from a deck zone.
-    var onScratchEnd: ((AudioEngine.DeckID) -> Void)?
-    /// Shift+1~4 / Shift+7~0: 현재 위치를 핫큐 슬롯에 저장.
-    var onSetHotCue: ((AudioEngine.DeckID, Int) -> Void)?
-    /// 1~4 / 7~0: 해당 슬롯으로 즉시 점프.
-    var onJumpToHotCue: ((AudioEngine.DeckID, Int) -> Void)?
+    var onAction: ((DJAction) -> Void)?
 
     // MARK: - Deck Status (updated by ViewController)
 
@@ -85,76 +65,82 @@ final class TouchLabView: NSView {
         super.init(frame: frameRect)
         allowedTouchTypes = [.indirect]
         wantsRestingTouches = false
-        startKeyHoldTimer()
     }
 
     required init?(coder: NSCoder) {
         super.init(coder: coder)
         allowedTouchTypes = [.indirect]
         wantsRestingTouches = false
-        startKeyHoldTimer()
     }
 
     override var acceptsFirstResponder: Bool { true }
 
+    override func viewDidMoveToWindow() {
+        super.viewDidMoveToWindow()
+
+        if let observedWindow {
+            NotificationCenter.default.removeObserver(
+                self,
+                name: NSWindow.didResignKeyNotification,
+                object: observedWindow
+            )
+        }
+
+        observedWindow = window
+        if let window {
+            if inputTimer == nil {
+                startInputTimer()
+            }
+            NotificationCenter.default.addObserver(
+                self,
+                selector: #selector(windowDidResignKey(_:)),
+                name: NSWindow.didResignKeyNotification,
+                object: window
+            )
+        } else {
+            inputTimer?.invalidate()
+            inputTimer = nil
+        }
+    }
+
+    override func resignFirstResponder() -> Bool {
+        keyboardStateMachine.focusLost()
+        return super.resignFirstResponder()
+    }
+
+    @objc private func windowDidResignKey(_ notification: Notification) {
+        cancelActiveInput()
+    }
+
     // MARK: - Keyboard Events
 
     override func keyDown(with event: NSEvent) {
-        if let command = KeyboardMapping.command(
-            for: event.keyCode,
+        let shift = event.modifierFlags.contains(.shift)
+        guard KeyboardMapping.handles(event.keyCode, shift: shift) else {
+            super.keyDown(with: event)
+            return
+        }
+        emit(keyboardStateMachine.keyDown(
+            keyCode: event.keyCode,
             isRepeat: event.isARepeat,
-            shift: event.modifierFlags.contains(.shift)
-        ) {
-            switch command {
-            case .stepCrossfader(let direction):
-                if direction < 0 {
-                    crossfaderMode = max(0, crossfaderMode - 1)
-                } else {
-                    crossfaderMode = min(2, crossfaderMode + 1)
-                }
-                crossfader = CrossfaderState(value: crossfaderModeValues[crossfaderMode])
-                needsDisplay = true
-                onCrossfaderChanged?(crossfader)
-            case .load(let deck): onLoadDeck?(deck)
-            case .togglePlay(let deck): onTogglePlay?(deck)
-            case .cue(let deck): onCue?(deck)
-            case .tapBPM(let deck): handleBpmTap(deck: deck)
-            case .setHotCue(let deck, let index): onSetHotCue?(deck, index)
-            case .jumpToHotCue(let deck, let index): onJumpToHotCue?(deck, index)
-            }
-            return
-        }
-
-        if let control = KeyboardMapping.heldControl(for: event.keyCode) {
-            setHeldControl(control, active: true)
-            return
-        }
-
-        super.keyDown(with: event)
+            shift: shift
+        ))
     }
 
     override func keyUp(with event: NSEvent) {
-        if let control = KeyboardMapping.heldControl(for: event.keyCode) {
-            setHeldControl(control, active: false)
-            return
-        }
-        super.keyUp(with: event)
-    }
-
-    private func setHeldControl(_ control: HeldKeyboardControl, active: Bool) {
-        switch control {
-        case .volume(.a, let direction): volumeKeyA = active ? direction : 0
-        case .volume(.b, let direction): volumeKeyB = active ? direction : 0
-        case .filter(.a, let direction): filterKeyA = active ? direction : 0
-        case .filter(.b, let direction): filterKeyB = active ? direction : 0
-        case .nudge(.a, let direction): nudgeKeyA = active ? direction : 0
-        case .nudge(.b, let direction): nudgeKeyB = active ? direction : 0
+        if KeyboardMapping.handles(
+            event.keyCode,
+            shift: event.modifierFlags.contains(.shift)
+        ) {
+            keyboardStateMachine.keyUp(keyCode: event.keyCode)
+        } else {
+            super.keyUp(with: event)
         }
     }
 
     // MARK: - BPM Tap
 
-    private func handleBpmTap(deck: AudioEngine.DeckID) {
+    private func handleBpmTap(deck: DeckID) {
         let now = CACurrentMediaTime()
         switch deck {
         case .a:
@@ -165,148 +151,138 @@ final class TouchLabView: NSView {
         needsDisplay = true
     }
 
-    // MARK: - Key Hold Timer
+    // MARK: - Input Timer
 
-    private func startKeyHoldTimer() {
-        Timer.scheduledTimer(withTimeInterval: 1.0 / 60.0, repeats: true) { [weak self] _ in
-            self?.applyHeldKeys()
-        }
+    private func startInputTimer() {
+        inputTimer = Timer.scheduledTimer(
+            timeInterval: 1.0 / 60.0,
+            target: self,
+            selector: #selector(inputTimerFired(_:)),
+            userInfo: nil,
+            repeats: true
+        )
     }
 
-    private func applyHeldKeys() {
-        if volumeKeyA != 0 { onVolume?(.a, volumeKeyA * 0.008) }
-        if volumeKeyB != 0 { onVolume?(.b, volumeKeyB * 0.008) }
-        if filterKeyA != 0 {
-            filterLevelA = max(0, min(1, filterLevelA + filterKeyA * 0.003))
-            onFilter?(.a, filterKeyA * 0.003)
-        }
-        if filterKeyB != 0 {
-            filterLevelB = max(0, min(1, filterLevelB + filterKeyB * 0.003))
-            onFilter?(.b, filterKeyB * 0.003)
-        }
-        if nudgeKeyA != 0 { onNudge?(.a, nudgeKeyA * 0.001) }
-        if nudgeKeyB != 0 { onNudge?(.b, nudgeKeyB * 0.001) }
+    @objc private func inputTimerFired(_ timer: Timer) {
+        emit(keyboardStateMachine.heldActions())
+        emit(gestureStateMachine.process(.tick(CACurrentMediaTime())))
     }
 
     // MARK: - Touch Events
 
     override func touchesBegan(with event: NSEvent) {
-        var updated = session
-        for touch in event.touches(matching: .began, in: self) {
-            let pos = touch.normalizedPosition
-            let tp = TouchPoint(
-                identity: ObjectIdentifier(touch.identity as AnyObject),
-                position: pos,
-                timestamp: event.timestamp
-            )
-            // Freeze deck on first contact — like putting a hand on a record.
-            if let zone = ZoneLayout.zone(for: pos) {
-                let isFirstInZone = !session.activeTouches.values.contains {
-                    ZoneLayout.zone(for: $0.position)?.name == zone.name
-                }
-                if isFirstInZone {
-                    switch zone.name {
-                    case .deckA:
-                        isScratchActiveA = true; scratchRateA = 0
-                        onScratch?(.a, 0)
-                    case .deckB:
-                        isScratchActiveB = true; scratchRateB = 0
-                        onScratch?(.b, 0)
-                    default: break
-                    }
-                }
-            }
-            updated = updated.adding(tp)
+        let points = sortedTouches(event.touches(matching: .began, in: self)).compactMap {
+            touchPoint(for: $0, timestamp: event.timestamp, createIdentity: true)
         }
-        session = updated
+        emit(gestureStateMachine.process(.began(points)))
+        syncSession()
     }
 
     override func touchesMoved(with event: NSEvent) {
-        var updated = session
-
-        for touch in event.touches(matching: .moved, in: self) {
-            let id = ObjectIdentifier(touch.identity as AnyObject)
-            let newPos = touch.normalizedPosition
-
-            if let prevPos = session.activeTouches[id]?.position,
-               let zone = ZoneLayout.zone(for: newPos) {
-                let deltaX = Float(newPos.x - prevPos.x)
-                let deltaY = Float(newPos.y - prevPos.y)
-                switch zone.name {
-                case .deckA:
-                    // 우세 축만 적용 — 대각선 움직임 시 양쪽 동시 발동 방지.
-                    if abs(deltaY) >= abs(deltaX) {
-                        let rate = Double(deltaY) * 200.0
-                        scratchRateA = rate
-                        isScratchActiveA = true
-                        onScratch?(.a, rate)
-                    } else {
-                        filterLevelA = max(0, min(1, filterLevelA + deltaX))
-                        onFilter?(.a, deltaX)
-                    }
-                case .deckB:
-                    if abs(deltaY) >= abs(deltaX) {
-                        let rate = Double(deltaY) * 200.0
-                        scratchRateB = rate
-                        isScratchActiveB = true
-                        onScratch?(.b, rate)
-                    } else {
-                        filterLevelB = max(0, min(1, filterLevelB + deltaX))
-                        onFilter?(.b, deltaX)
-                    }
-                case .topStrip:
-                    let deck: AudioEngine.DeckID = newPos.x < 0.5 ? .a : .b
-                    onVolume?(deck, deltaY)
-                case .bottomStrip:
-                    crossfader = crossfader.nudged(by: deltaX)
-                    needsDisplay = true
-                    onCrossfaderChanged?(crossfader)
-                }
-            }
-
-            let tp = TouchPoint(identity: id, position: newPos, timestamp: event.timestamp)
-            updated = updated.updating(tp)
+        let points = sortedTouches(event.touches(matching: .moved, in: self)).compactMap {
+            touchPoint(for: $0, timestamp: event.timestamp, createIdentity: false)
         }
-        session = updated
+        emit(gestureStateMachine.process(.moved(points)))
+        syncSession()
     }
 
     override func touchesEnded(with event: NSEvent) {
-        // Snapshot which deck zones had touches before rebuild.
-        let hadA = session.activeTouches.values.contains { ZoneLayout.zone(for: $0.position)?.name == .deckA }
-        let hadB = session.activeTouches.values.contains { ZoneLayout.zone(for: $0.position)?.name == .deckB }
-
-        // Rebuild from still-active touches to avoid ObjectIdentifier
-        // mismatches from existential re-boxing across events.
-        var remaining: [ObjectIdentifier: TouchPoint] = [:]
-        for touch in event.touches(matching: .touching, in: self) {
-            let id = ObjectIdentifier(touch.identity as AnyObject)
-            remaining[id] = TouchPoint(
-                identity: id,
-                position: touch.normalizedPosition,
-                timestamp: event.timestamp
-            )
+        let endedTouches = sortedTouches(event.touches(matching: .ended, in: self))
+        let identities = endedTouches.compactMap { touchID(for: $0, create: false) }
+        emit(gestureStateMachine.process(.ended(identities)))
+        for touch in endedTouches {
+            touchIDs.removeValue(forKey: touch.identity as! NSObject)
         }
-        session = TouchSession(activeTouches: remaining)
-
-        // Reset nudge/scratch for decks that lost all their touches.
-        let hasA = session.activeTouches.values.contains { ZoneLayout.zone(for: $0.position)?.name == .deckA }
-        let hasB = session.activeTouches.values.contains { ZoneLayout.zone(for: $0.position)?.name == .deckB }
-        if hadA && !hasA {
-            isScratchActiveA = false; scratchRateA = 0
-            onNudgeEnd?(.a); onScratchEnd?(.a)
-        }
-        if hadB && !hasB {
-            isScratchActiveB = false; scratchRateB = 0
-            onNudgeEnd?(.b); onScratchEnd?(.b)
-        }
+        syncSession()
     }
 
     override func touchesCancelled(with event: NSEvent) {
-        session = .empty
-        isScratchActiveA = false; isScratchActiveB = false
-        scratchRateA = 0; scratchRateB = 0
-        onNudgeEnd?(.a); onNudgeEnd?(.b)
-        onScratchEnd?(.a); onScratchEnd?(.b)
+        cancelActiveInput()
+    }
+
+    private func sortedTouches(_ touches: Set<NSTouch>) -> [NSTouch] {
+        touches.sorted {
+            let lhs = $0.identity as! NSObject
+            let rhs = $1.identity as! NSObject
+            if lhs.hash == rhs.hash {
+                if $0.normalizedPosition.x == $1.normalizedPosition.x {
+                    return $0.normalizedPosition.y < $1.normalizedPosition.y
+                }
+                return $0.normalizedPosition.x < $1.normalizedPosition.x
+            }
+            return lhs.hash < rhs.hash
+        }
+    }
+
+    private func touchPoint(
+        for touch: NSTouch,
+        timestamp: TimeInterval,
+        createIdentity: Bool
+    ) -> TouchPoint? {
+        guard let identity = touchID(for: touch, create: createIdentity) else { return nil }
+        return TouchPoint(
+            identity: identity,
+            position: touch.normalizedPosition,
+            timestamp: timestamp
+        )
+    }
+
+    private func touchID(for touch: NSTouch, create: Bool) -> TouchID? {
+        let key = touch.identity as! NSObject
+        if let existing = touchIDs[key] {
+            return existing
+        }
+        guard create else { return nil }
+
+        let identity = TouchID(rawValue: nextTouchID)
+        nextTouchID &+= 1
+        touchIDs[key] = identity
+        return identity
+    }
+
+    private func syncSession() {
+        session = gestureStateMachine.session
+    }
+
+    private func cancelActiveInput() {
+        keyboardStateMachine.focusLost()
+        emit(gestureStateMachine.process(.cancelled))
+        touchIDs.removeAll(keepingCapacity: true)
+        syncSession()
+    }
+
+    private func emit(_ actions: [DJAction]) {
+        for action in actions {
+            switch action {
+            case .adjustCrossfader(let delta):
+                crossfader = crossfader.nudged(by: delta)
+                needsDisplay = true
+            case .stepCrossfader(let direction):
+                crossfader = crossfader.stepped(toward: direction)
+                needsDisplay = true
+            case .adjustFilter(.a, let delta):
+                filterLevelA = max(0, min(1, filterLevelA + delta))
+            case .adjustFilter(.b, let delta):
+                filterLevelB = max(0, min(1, filterLevelB + delta))
+            case .setScratch(.a, let rate):
+                isScratchActiveA = true
+                scratchRateA = rate
+            case .setScratch(.b, let rate):
+                isScratchActiveB = true
+                scratchRateB = rate
+            case .endScratch(.a):
+                isScratchActiveA = false
+                scratchRateA = 0
+            case .endScratch(.b):
+                isScratchActiveB = false
+                scratchRateB = 0
+            case .tapBPM(let deck):
+                handleBpmTap(deck: deck)
+            case .load, .togglePlay, .cue, .nudge, .adjustVolume, .setHotCue, .jumpToHotCue:
+                break
+            }
+            onAction?(action)
+        }
     }
 
     // MARK: - Drawing
@@ -586,6 +562,9 @@ final class TouchLabView: NSView {
 
         // A / A+B / B mode labels — highlight active mode
         let modeLabels = ["A", "A+B", "B"]
+        let crossfaderMode = crossfaderModeValues.enumerated().min {
+            abs($0.element - crossfader.value) < abs($1.element - crossfader.value)
+        }?.offset ?? 1
         let segW = stripRect.width / 3
         for (i, label) in modeLabels.enumerated() {
             let segRect = NSRect(x: stripRect.minX + CGFloat(i) * segW,
