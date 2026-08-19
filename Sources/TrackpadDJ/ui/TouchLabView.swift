@@ -66,12 +66,12 @@ final class TouchLabView: NSView {
     private var filterLevelB: Float = 1.0
 
     // BPM tap state — purely local, no audio-side dependency.
-    private var tapTimesA: [TimeInterval] = []
-    private var tapTimesB: [TimeInterval] = []
-    private var bpmA: Double = 0
-    private var bpmB: Double = 0
-    private var beatOffsetA: Double = 0  // extendedProgress at first tap of current sequence
-    private var beatOffsetB: Double = 0
+    private var bpmTapA = BPMTapState()
+    private var bpmTapB = BPMTapState()
+    private var bpmA: Double { bpmTapA.bpm }
+    private var bpmB: Double { bpmTapB.bpm }
+    private var beatOffsetA: Double { bpmTapA.beatOffset }
+    private var beatOffsetB: Double { bpmTapB.beatOffset }
 
     // Scratch state — tracked locally for visual feedback.
     private var scratchRateA: Double = 0
@@ -100,74 +100,55 @@ final class TouchLabView: NSView {
     // MARK: - Keyboard Events
 
     override func keyDown(with event: NSEvent) {
-        switch event.keyCode {
-        // Crossfader: 3-mode snap (A=0 / both=0.5 / B=1). One-shot, no repeat.
-        case 123: // ←
-            if !event.isARepeat {
-                crossfaderMode = max(0, crossfaderMode - 1)
-                crossfader = CrossfaderState(value: crossfaderModeValues[crossfaderMode])
-                needsDisplay = true
-                onCrossfaderChanged?(crossfader)
-            }
-        case 124: // →
-            if !event.isARepeat {
-                crossfaderMode = min(2, crossfaderMode + 1)
-                crossfader = CrossfaderState(value: crossfaderModeValues[crossfaderMode])
-                needsDisplay = true
-                onCrossfaderChanged?(crossfader)
-            }
-        // One-shot transport
-        case 12: if !event.isARepeat { onLoadDeck?(.a) }   // Q
-        case 13: if !event.isARepeat { onLoadDeck?(.b) }   // W
-        case 0:  if !event.isARepeat { onTogglePlay?(.a) } // A
-        case 1:  if !event.isARepeat { onTogglePlay?(.b) } // S
-        case 6:  if !event.isARepeat { onCue?(.a) }        // Z
-        case 7:  if !event.isARepeat { onCue?(.b) }        // X
-        // Hold keys: set direction, 60fps timer drives the callbacks
-        case 14: volumeKeyA = +1  // E
-        case 2:  volumeKeyA = -1  // D
-        case 15: volumeKeyB = +1  // R
-        case 3:  volumeKeyB = -1  // F
-        case 17: filterKeyA = +1  // T
-        case 5:  filterKeyA = -1  // G
-        case 16: filterKeyB = +1  // Y
-        case 4:  filterKeyB = -1  // H
-        case 126: nudgeKeyA = +1  // up arrow
-        case 125: nudgeKeyA = -1  // down arrow
-        case 34:  nudgeKeyB = +1  // I
-        case 40:  nudgeKeyB = -1  // K
-        // BPM tap — B = deck A, N = deck B.
-        case 11: if !event.isARepeat { handleBpmTap(deck: .a) }  // B
-        case 45: if !event.isARepeat { handleBpmTap(deck: .b) }  // N
-        // Hot cues — deck A: 1/2/3/4, deck B: 7/8/9/0. Shift = set, no modifier = jump.
-        case 18, 19, 20, 21:  // 1, 2, 3, 4
-            if !event.isARepeat {
-                let idx = Int(event.keyCode) - 18
-                if event.modifierFlags.contains(.shift) { onSetHotCue?(.a, idx) }
-                else { onJumpToHotCue?(.a, idx) }
-            }
-        case 26, 28, 25, 29:  // 7, 8, 9, 0
-            if !event.isARepeat {
-                let bMap: [UInt16: Int] = [26: 0, 28: 1, 25: 2, 29: 3]
-                if let idx = bMap[event.keyCode] {
-                    if event.modifierFlags.contains(.shift) { onSetHotCue?(.b, idx) }
-                    else { onJumpToHotCue?(.b, idx) }
+        if let command = KeyboardMapping.command(
+            for: event.keyCode,
+            isRepeat: event.isARepeat,
+            shift: event.modifierFlags.contains(.shift)
+        ) {
+            switch command {
+            case .stepCrossfader(let direction):
+                if direction < 0 {
+                    crossfaderMode = max(0, crossfaderMode - 1)
+                } else {
+                    crossfaderMode = min(2, crossfaderMode + 1)
                 }
+                crossfader = CrossfaderState(value: crossfaderModeValues[crossfaderMode])
+                needsDisplay = true
+                onCrossfaderChanged?(crossfader)
+            case .load(let deck): onLoadDeck?(deck)
+            case .togglePlay(let deck): onTogglePlay?(deck)
+            case .cue(let deck): onCue?(deck)
+            case .tapBPM(let deck): handleBpmTap(deck: deck)
+            case .setHotCue(let deck, let index): onSetHotCue?(deck, index)
+            case .jumpToHotCue(let deck, let index): onJumpToHotCue?(deck, index)
             }
-        default:
-            super.keyDown(with: event)
+            return
         }
+
+        if let control = KeyboardMapping.heldControl(for: event.keyCode) {
+            setHeldControl(control, active: true)
+            return
+        }
+
+        super.keyDown(with: event)
     }
 
     override func keyUp(with event: NSEvent) {
-        switch event.keyCode {
-        case 14, 2:    volumeKeyA = 0
-        case 15, 3:    volumeKeyB = 0
-        case 17, 5:    filterKeyA = 0
-        case 16, 4:    filterKeyB = 0
-        case 126, 125: nudgeKeyA = 0
-        case 34, 40:   nudgeKeyB = 0
-        default: super.keyUp(with: event)
+        if let control = KeyboardMapping.heldControl(for: event.keyCode) {
+            setHeldControl(control, active: false)
+            return
+        }
+        super.keyUp(with: event)
+    }
+
+    private func setHeldControl(_ control: HeldKeyboardControl, active: Bool) {
+        switch control {
+        case .volume(.a, let direction): volumeKeyA = active ? direction : 0
+        case .volume(.b, let direction): volumeKeyB = active ? direction : 0
+        case .filter(.a, let direction): filterKeyA = active ? direction : 0
+        case .filter(.b, let direction): filterKeyB = active ? direction : 0
+        case .nudge(.a, let direction): nudgeKeyA = active ? direction : 0
+        case .nudge(.b, let direction): nudgeKeyB = active ? direction : 0
         }
     }
 
@@ -175,29 +156,12 @@ final class TouchLabView: NSView {
 
     private func handleBpmTap(deck: AudioEngine.DeckID) {
         let now = CACurrentMediaTime()
-        var taps = deck == .a ? tapTimesA : tapTimesB
-
-        // 2초 이상 간격이면 새 시퀀스 시작.
-        if let last = taps.last, now - last > 2.0 { taps = [] }
-
-        // 첫 탭에서 비트 기준점 기록.
-        if taps.isEmpty {
-            if deck == .a { beatOffsetA = extendedProgressA }
-            else          { beatOffsetB = extendedProgressB }
+        switch deck {
+        case .a:
+            bpmTapA.tap(at: now, progress: extendedProgressA)
+        case .b:
+            bpmTapB.tap(at: now, progress: extendedProgressB)
         }
-
-        taps.append(now)
-        if taps.count > 8 { taps = Array(taps.suffix(8)) }
-
-        if taps.count >= 2 {
-            // 전체 구간 나누기: 첫 탭~마지막 탭 / (n-1) 간격
-            // 간격 평균보다 누적 오차가 훨씬 적음.
-            let span = taps.last! - taps.first!
-            let bpm = min(200, max(60, 60.0 * Double(taps.count - 1) / span))
-            if deck == .a { bpmA = bpm } else { bpmB = bpm }
-        }
-
-        if deck == .a { tapTimesA = taps } else { tapTimesB = taps }
         needsDisplay = true
     }
 

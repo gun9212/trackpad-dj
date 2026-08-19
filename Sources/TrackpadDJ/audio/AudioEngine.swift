@@ -4,7 +4,7 @@ import AVFoundation
 /// Signal chain: player → mainMixerNode (reconnected with file format on load)
 final class AudioEngine {
 
-    enum DeckID { case a, b }
+    enum DeckID: Equatable { case a, b }
 
     // Public protocol interface — ViewController and View depend only on this.
     var deckA: any DeckProtocol { _deckA }
@@ -72,11 +72,7 @@ final class AudioEngine {
     }
 
     private func applyVolumes() {
-        // Scratch crossfader curve: one deck is always at full gain.
-        // 0.0→0.5: A=full, B fades in.  0.5: both full.  0.5→1.0: B=full, A fades out.
-        let v = crossfaderValue
-        let aGain: Float = v <= 0.5 ? 1.0 : Float(1.0 - (v - 0.5) * 2.0)
-        let bGain: Float = v >= 0.5 ? 1.0 : Float(v * 2.0)
+        let (aGain, bGain) = CrossfaderCurve.scratchStyleGains(at: crossfaderValue)
         _deckA.volume = faderA * aGain
         _deckB.volume = faderB * bGain
     }

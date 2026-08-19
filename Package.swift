@@ -8,6 +8,10 @@ let package = Package(
         .executableTarget(
             name: "TrackpadDJ",
             path: "Sources/TrackpadDJ"
+        ),
+        .testTarget(
+            name: "TrackpadDJTests",
+            dependencies: ["TrackpadDJ"]
         )
     ]
 )

@@ -1,5 +1,5 @@
 # Swift build artifacts
-.build/
+.build*/
 *.o
 *.d
 
@@ -22,6 +22,8 @@ DerivedData/
 *.md
 !README.md
 !AGENTS.md
+!Docs/
+!Docs/Verification.md
 
 # macOS
 .DS_Store
