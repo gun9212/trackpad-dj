@@ -31,11 +31,11 @@ final class SnapshotTests: XCTestCase {
         let engine = AudioEngine(startsAudioEngine: false)
         defer { engine.shutdown() }
 
-        engine.applyCrossfader(CrossfaderState(value: 0.25))
+        engine.applyCrossfader(.deckAOnly)
         XCTAssertEqual(
             engine.mixerSnapshot(),
             MixerSnapshot(
-                crossfaderValue: 0.25,
+                crossfaderValue: 0,
                 outputMode: .stereoMaster,
                 routingErrorMessage: nil
             )

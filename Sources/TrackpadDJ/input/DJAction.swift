@@ -21,7 +21,6 @@ enum JogMode: Equatable, Sendable {
 /// Input translated into operations meaningful to the DJ domain.
 enum DJAction: Equatable, Sendable {
     case selectActiveDeck(DeckID)
-    case adjustCrossfader(Float)
     case stepCrossfader(Int)
     case load(DeckID)
     case togglePlay(DeckID)

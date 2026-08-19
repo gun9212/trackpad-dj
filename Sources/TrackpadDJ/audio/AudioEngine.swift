@@ -60,10 +60,11 @@ final class AudioEngine {
     private var bpmTapA = BPMTapState()
     private var bpmTapB = BPMTapState()
 
-    // Deck channel faders [0, 1]. Combined with crossfader for master volume.
+    // Deck channel faders [0, 1]. The crossfader only gates each master path on or off.
     private(set) var faderA: Float = 1.0
     private(set) var faderB: Float = 1.0
-    private(set) var crossfaderValue: Float = 0.5
+    private var crossfaderState = CrossfaderState.center
+    var crossfaderValue: Float { crossfaderState.value }
 
     init(
         trackLoader: any TrackLoading = TrackLoader(),
@@ -323,18 +324,14 @@ final class AudioEngine {
 
     // MARK: - Crossfader and Channel Faders
 
-    /// Equal-power crossfade: value 0 = full A, 1 = full B.
+    /// Three-position output gate: A only, both decks, or B only.
     func applyCrossfader(_ state: CrossfaderState) {
-        crossfaderValue = state.value
+        crossfaderState = state
         applyVolumes()
     }
 
-    func adjustCrossfader(by delta: Float) {
-        applyCrossfader(CrossfaderState(value: crossfaderValue).nudged(by: delta))
-    }
-
     func stepCrossfader(toward direction: Int) {
-        applyCrossfader(CrossfaderState(value: crossfaderValue).stepped(toward: direction))
+        applyCrossfader(crossfaderState.stepped(toward: direction))
     }
 
     func setFader(deck: DeckID, deltaY: Float) {
@@ -346,7 +343,7 @@ final class AudioEngine {
     }
 
     private func applyVolumes() {
-        let (aGain, bGain) = CrossfaderCurve.equalPowerGains(at: crossfaderValue)
+        let (aGain, bGain) = CrossfaderGate.gains(for: crossfaderState)
         _deckA.volume = faderA * aGain
         _deckB.volume = faderB * bGain
     }

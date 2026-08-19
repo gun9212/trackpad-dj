@@ -114,7 +114,7 @@ swift build
 | `Shift+B` | 탭 보정을 제거하고 자동 BPM 복원 |
 | `V` | 활성 덱 프리큐 선택 토글 |
 | `↑` / `↓` | 활성 덱 앞 / 뒤로 너지 |
-| `←` / `→` | 크로스페이더 `A → A+B → B` 전환 |
+| `←` / `→` | 3단 크로스페이더 게이트 `A ON → A+B ON → B ON` 전환 |
 | `M` | Stereo Master / Split Cue 출력 전환 |
 | `P` | 커서 잠금·숨김 토글 |
 | `Esc` | 활성 조그 취소와 커서 잠금 해제 |
@@ -156,7 +156,7 @@ AVAudioSourceNode → low-pass EQ → master/cue path → output routing → mai
 - 두 덱은 별도 소스, 믹서와 로우패스 EQ를 사용한다.
 - 로우패스 범위는 약 200 Hz~20 kHz다.
 - 템포는 피치를 함께 바꾸는 Varispeed 방식이며 `-8.0%...+8.0%` 범위다. 피치 벤드는 별도 atomic 값으로 ±8%를 순간 합산한다.
-- 크로스페이더는 Equal-power 커브이며 중앙에서 두 덱이 각각 약 0.707 게인이다.
+- 크로스페이더는 `A만 ON / 둘 다 ON / B만 ON`의 3단 출력 게이트다. 켜진 덱은 채널 페이더 게인을 그대로 유지하고 선택되지 않은 덱만 뮤트한다.
 - 일반 재생률은 `1 + (tempoPercent + pitchBendPercent) / 100`이며, 스크래치 중에는 스크래치 속도가 이를 대체한다.
 - 스크래치는 샘플 읽기 위치를 속도와 방향에 따라 이동하는 varispeed 방식이다.
 - 변속 재생에는 4-point Cubic Hermite 보간을 사용한다.
@@ -213,7 +213,7 @@ Sources/TrackpadDJ/
 │   ├── TrackLoader.swift
 │   ├── AudioEngine.swift
 │   ├── OutputRouting.swift
-│   ├── CrossfaderCurve.swift
+│   ├── CrossfaderGate.swift
 │   └── CrossfaderState.swift
 └── ui/
     ├── CursorLockController.swift
@@ -258,7 +258,7 @@ Sources/TrackpadDJ/
 - [x] 덱별 볼륨
 - [x] 덱별 로우패스 필터
 - [x] 키보드 3단 크로스페이더 전환
-- [x] Equal-power 크로스페이더
+- [x] 켜진 덱의 볼륨을 바꾸지 않는 3단 ON/OFF 크로스페이더 게이트
 - [x] 덱별 ±8% 수동 Varispeed 템포
 - [x] 전체 트랙패드 프리즈와 양방향 기본 스크래치
 - [x] `Shift` 시작 ±8% 피치 벤드와 정지 덱 불변
@@ -340,7 +340,7 @@ Sources/TrackpadDJ/
 - 터치 종료·취소 후 스크래치나 피치 벤드가 남지 않는가
 - 피치 벤드가 정지한 덱의 재생 위치를 움직이지 않는가
 - 볼륨과 필터 값이 허용 범위를 벗어나지 않는가
-- 크로스페이더 양 끝과 중앙에서 예상한 게인이 적용되는가
+- 크로스페이더 양 끝에서 선택되지 않은 덱만 뮤트되고 중앙에서 두 덱의 채널 페이더 게인이 그대로 유지되는가
 - 스크래치를 끝내면 설정된 템포와 현재 벤드의 유효 재생률로 복귀하는가
 - 역방향 스크래치와 프리롤·트랙 끝 경계에서 범위를 벗어나지 않는가
 - 트랙 재로드 후 오디오 그래프, 자동 BeatGrid와 UI가 새 파일 상태를 반영하고 탭·템포·벤드를 초기화하는가
