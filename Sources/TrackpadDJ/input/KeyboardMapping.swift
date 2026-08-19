@@ -55,6 +55,12 @@ struct KeyboardStateMachine {
     private(set) var pressedKeys: Set<UInt16> = []
     private var heldDeckByKey: [UInt16: DeckID] = [:]
 
+    mutating func selectActiveDeck(_ deck: DeckID) -> DJAction? {
+        guard activeDeck != deck else { return nil }
+        activeDeck = deck
+        return .selectActiveDeck(deck)
+    }
+
     mutating func keyDown(keyCode: UInt16, isRepeat: Bool, shift: Bool) -> [DJAction] {
         let oneShot = KeyboardMapping.oneShotAction(
             for: keyCode,
@@ -73,7 +79,7 @@ struct KeyboardStateMachine {
 
         guard let oneShot else { return [] }
         if case .selectActiveDeck(let deck) = oneShot {
-            activeDeck = deck
+            _ = selectActiveDeck(deck)
         }
         return [oneShot]
     }

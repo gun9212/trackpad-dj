@@ -12,7 +12,7 @@ final class TouchLabViewController: NSViewController {
     private var operationStatus: String?
 
     override func loadView() {
-        touchLabView = TouchLabView(frame: NSRect(x: 0, y: 0, width: 900, height: 600))
+        touchLabView = TouchLabView(frame: NSRect(x: 0, y: 0, width: 1_180, height: 720))
         view = touchLabView
         wireCallbacks()
         refreshDisplaySnapshot()

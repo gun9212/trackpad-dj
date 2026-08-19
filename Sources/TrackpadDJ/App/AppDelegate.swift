@@ -9,11 +9,20 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     func applicationDidFinishLaunching(_ notification: Notification) {
         let vc = TouchLabViewController()
         let window = NSWindow(contentViewController: vc)
-        window.setContentSize(NSSize(width: 900, height: 600))
-        window.title = "Trackpad DJ — Single Jog"
+        window.setContentSize(NSSize(width: 1_180, height: 720))
+        window.contentMinSize = NSSize(width: 960, height: 620)
+        window.styleMask.insert(.fullSizeContentView)
+        window.titleVisibility = .hidden
+        window.titlebarAppearsTransparent = true
+        window.title = "Trackpad DJ"
         window.center()
         window.appearance = NSAppearance(named: .darkAqua)
-        window.backgroundColor = NSColor(white: 0.08, alpha: 1.0)
+        window.backgroundColor = NSColor(
+            srgbRed: 0.043,
+            green: 0.051,
+            blue: 0.063,
+            alpha: 1
+        )
         window.makeKeyAndOrderFront(nil)
         self.window = window
         mainViewController = vc
