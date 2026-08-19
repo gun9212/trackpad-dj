@@ -22,6 +22,8 @@ enum BeatGridAnalyzer {
     private static let targetEnvelopeRate = 200.0
     private static let candidateBPMRange = 60.0...200.0
     private static let normalizedBPMRange = 80.0...160.0
+    private static let onsetSmoothingKernel: [Float] = [1, 2, 3, 4, 5, 4, 3, 2, 1]
+    private static let doubleTempoSupportWeight: Float = 0.75
 
     static func analyze(_ buffer: AVAudioPCMBuffer) -> BeatGrid? {
         guard let channelData = buffer.floatChannelData else { return nil }
@@ -67,10 +69,14 @@ enum BeatGridAnalyzer {
             return nil
         }
 
-        var onsets = [Float](repeating: 0, count: energy.count)
-        var previous: Float = 0
-        for index in energy.indices {
-            let current = energy[index]
+        // Suppress frame-scale level ripples before measuring positive energy changes.
+        let smoothedEnergy = smoothEnergy(energy)
+        guard let firstEnergy = smoothedEnergy.first else { return nil }
+
+        var onsets = [Float](repeating: 0, count: smoothedEnergy.count)
+        var previous = firstEnergy
+        for index in smoothedEnergy.indices.dropFirst() {
+            let current = smoothedEnergy[index]
             onsets[index] = max(0, current - previous)
             previous = current
         }
@@ -87,8 +93,7 @@ enum BeatGridAnalyzer {
         let padded = onsets + [Float](repeating: 0, count: maximumLag)
         let rawCorrelation: [Float] = vDSP.correlate(padded, withKernel: onsets)
 
-        var bestLag = minimumLag
-        var bestScore: Float = 0
+        var correlationScores = [Float](repeating: 0, count: maximumLag + 1)
         for lag in minimumLag...maximumLag {
             let overlap = onsets.count - lag
             guard overlap > 0, lag < rawCorrelation.count else { continue }
@@ -99,15 +104,34 @@ enum BeatGridAnalyzer {
             let denominator = leadingRMS * trailingRMS * Float(overlap)
             guard denominator > 0 else { continue }
 
-            let score = rawCorrelation[lag] / denominator
-            if score > bestScore {
-                bestScore = score
+            correlationScores[lag] = rawCorrelation[lag] / denominator
+        }
+
+        var bestLag: Int?
+        var bestCombinedScore: Float = 0
+        for lag in minimumLag...maximumLag {
+            let bpm = 60 * sampleRate / Double(lag)
+            guard normalizedBPMRange.contains(bpm) else { continue }
+
+            // A real beat often has corroborating eighth-note energy at twice its tempo.
+            var combinedScore = correlationScores[lag]
+            let doubleTempo = bpm * 2
+            if candidateBPMRange.contains(doubleTempo) {
+                let doubleTempoLag = Int((sampleRate * 60 / doubleTempo).rounded())
+                if correlationScores.indices.contains(doubleTempoLag) {
+                    combinedScore += correlationScores[doubleTempoLag] * doubleTempoSupportWeight
+                }
+            }
+
+            if combinedScore > bestCombinedScore {
+                bestCombinedScore = combinedScore
                 bestLag = lag
             }
         }
 
-        let rawBPM = 60 * sampleRate / Double(bestLag)
-        let bpm = normalize(rawBPM)
+        guard let bestLag else { return nil }
+        let bestScore = correlationScores[bestLag]
+        let bpm = 60 * sampleRate / Double(bestLag)
         let period = sampleRate * 60 / bpm
         guard period.isFinite, period >= 1 else { return nil }
 
@@ -134,15 +158,26 @@ enum BeatGridAnalyzer {
         )
     }
 
-    private static func normalize(_ bpm: Double) -> Double {
-        var value = bpm
-        while value < normalizedBPMRange.lowerBound {
-            value *= 2
+    private static func smoothEnergy(_ energy: [Float]) -> [Float] {
+        let radius = onsetSmoothingKernel.count / 2
+        var result = [Float](repeating: 0, count: energy.count)
+
+        for index in energy.indices {
+            var weightedEnergy: Float = 0
+            var weightTotal: Float = 0
+            for kernelIndex in onsetSmoothingKernel.indices {
+                let sourceIndex = index + kernelIndex - radius
+                guard energy.indices.contains(sourceIndex) else { continue }
+                let weight = onsetSmoothingKernel[kernelIndex]
+                weightedEnergy += energy[sourceIndex] * weight
+                weightTotal += weight
+            }
+            if weightTotal > 0 {
+                result[index] = weightedEnergy / weightTotal
+            }
         }
-        while value > normalizedBPMRange.upperBound {
-            value /= 2
-        }
-        return value
+
+        return result
     }
 
     private static func strongestPhase(in onsets: [Float], period: Double) -> Int {
