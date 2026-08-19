@@ -9,6 +9,11 @@ struct DeckSnapshot: Equatable, Sendable {
     let extendedProgress: Double
     let duration: Double
     let tempoPercent: Double
+    let pitchBendPercent: Double
+    let bpm: Double?
+    let firstBeatTime: TimeInterval?
+    let beatGridSource: BeatGridSource?
+    let beatConfidence: Double?
     let waveformSamples: [Float]
     let faderLevel: Float
     let filterLevel: Float
@@ -23,6 +28,11 @@ struct DeckSnapshot: Equatable, Sendable {
             extendedProgress: 0,
             duration: 0,
             tempoPercent: 0,
+            pitchBendPercent: 0,
+            bpm: nil,
+            firstBeatTime: nil,
+            beatGridSource: nil,
+            beatConfidence: nil,
             waveformSamples: [],
             faderLevel: 1,
             filterLevel: 1,

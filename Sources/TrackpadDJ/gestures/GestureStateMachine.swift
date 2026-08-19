@@ -2,7 +2,7 @@ import CoreGraphics
 import Foundation
 
 enum GestureInputEvent: Equatable, Sendable {
-    case began([TouchPoint])
+    case began([TouchPoint], deck: DeckID, mode: JogMode)
     case moved([TouchPoint])
     case ended([TouchID])
     case cancelled
@@ -12,35 +12,28 @@ enum GestureInputEvent: Equatable, Sendable {
 struct GestureStateMachine {
 
     struct Configuration: Equatable, Sendable {
-        var axisLockDistance: CGFloat = 0.006
-        var dominanceRatio: CGFloat = 1.25
         var scratchSensitivity: Double = 3.3
         var scratchRange: ClosedRange<Double> = -8.0...8.0
+        var bendSensitivity: Double = 8.0
+        var bendRange: ClosedRange<Double> = -8.0...8.0
         var stationaryTimeout: TimeInterval = 0.050
 
         static let `default` = Configuration()
     }
 
-    private enum Axis {
-        case horizontal
-        case vertical
-    }
-
     private struct ControlState {
-        let zone: Zone.Name
-        let origin: TouchPoint
-        let volumeDeck: DeckID?
+        let identity: TouchID
+        let deck: DeckID
+        let mode: JogMode
         var lastPoint: TouchPoint
-        var axis: Axis?
-        var lastScratchMovement: TimeInterval?
-        var scratchTargetIsZero = true
+        var lastMovement: TimeInterval?
+        var targetIsZero = true
     }
 
     let configuration: Configuration
     private(set) var session: TouchSession = .empty
-
-    private var controllingTouchByZone: [Zone.Name: TouchID] = [:]
-    private var controls: [TouchID: ControlState] = [:]
+    private var control: ControlState?
+    private var controllerClaimedForSession = false
 
     init(configuration: Configuration = .default) {
         self.configuration = configuration
@@ -48,8 +41,8 @@ struct GestureStateMachine {
 
     mutating func process(_ event: GestureInputEvent) -> [DJAction] {
         switch event {
-        case .began(let touches):
-            return touchesBegan(touches)
+        case .began(let touches, let deck, let mode):
+            return touchesBegan(touches, deck: deck, mode: mode)
         case .moved(let touches):
             return touchesMoved(touches)
         case .ended(let identities):
@@ -61,88 +54,54 @@ struct GestureStateMachine {
         }
     }
 
-    private mutating func touchesBegan(_ touches: [TouchPoint]) -> [DJAction] {
-        var actions: [DJAction] = []
-
-        for touch in touches.sorted(by: Self.touchOrder) {
+    private mutating func touchesBegan(
+        _ touches: [TouchPoint],
+        deck: DeckID,
+        mode: JogMode
+    ) -> [DJAction] {
+        let sorted = touches.sorted(by: Self.touchOrder)
+        let sessionWasEmpty = session.count == 0
+        for touch in sorted {
             session = session.adding(touch)
-            guard let zone = ZoneLayout.zone(for: touch.position)?.name,
-                  controllingTouchByZone[zone] == nil else { continue }
-
-            controllingTouchByZone[zone] = touch.identity
-            let volumeDeck: DeckID? = zone == .topStrip ? (touch.position.x < 0.5 ? .a : .b) : nil
-            controls[touch.identity] = ControlState(
-                zone: zone,
-                origin: touch,
-                volumeDeck: volumeDeck,
-                lastPoint: touch
-            )
-
-            if let deck = Self.deck(for: zone) {
-                actions.append(.setScratch(deck, 0))
-            }
         }
 
-        return actions
+        guard sessionWasEmpty,
+              !controllerClaimedForSession,
+              let first = sorted.first else { return [] }
+
+        controllerClaimedForSession = true
+        control = ControlState(
+            identity: first.identity,
+            deck: deck,
+            mode: mode,
+            lastPoint: first
+        )
+        return [startAction(deck: deck, mode: mode)]
     }
 
     private mutating func touchesMoved(_ touches: [TouchPoint]) -> [DJAction] {
-        var actions: [DJAction] = []
+        var action: DJAction?
 
         for touch in touches.sorted(by: Self.touchOrder) {
             guard session.activeTouches[touch.identity] != nil else { continue }
             session = session.updating(touch)
-            guard var control = controls[touch.identity] else { continue }
+            guard var current = control,
+                  current.identity == touch.identity else { continue }
 
-            let deltaX = touch.position.x - control.lastPoint.position.x
-            let deltaY = touch.position.y - control.lastPoint.position.y
-
-            switch control.zone {
-            case .topStrip:
-                if let deck = control.volumeDeck, deltaY != 0 {
-                    actions.append(.adjustVolume(deck, Float(deltaY)))
-                }
-            case .bottomStrip:
-                if deltaX != 0 {
-                    actions.append(.adjustCrossfader(Float(deltaX)))
-                }
-            case .deckA, .deckB:
-                guard let deck = Self.deck(for: control.zone) else { break }
-                if control.axis == nil {
-                    control.axis = lockedAxis(
-                        from: control.origin.position,
-                        to: touch.position
-                    )
-                }
-
-                switch control.axis {
-                case .horizontal:
-                    if deltaX != 0 {
-                        actions.append(.adjustFilter(deck, Float(deltaX)))
-                    }
-                case .vertical:
-                    let elapsed = touch.timestamp - control.lastPoint.timestamp
-                    if elapsed > 0, deltaY != 0 {
-                        let velocity = Double(deltaY) / elapsed
-                        let unclampedRate = velocity * configuration.scratchSensitivity
-                        let rate = min(
-                            configuration.scratchRange.upperBound,
-                            max(configuration.scratchRange.lowerBound, unclampedRate)
-                        )
-                        actions.append(.setScratch(deck, rate))
-                        control.lastScratchMovement = touch.timestamp
-                        control.scratchTargetIsZero = rate == 0
-                    }
-                case nil:
-                    break
-                }
+            let deltaY = touch.position.y - current.lastPoint.position.y
+            let elapsed = touch.timestamp - current.lastPoint.timestamp
+            if elapsed > 0, deltaY != 0 {
+                let velocity = Double(deltaY) / elapsed
+                let target = targetValue(velocity: velocity, mode: current.mode)
+                action = updateAction(deck: current.deck, mode: current.mode, value: target)
+                current.lastMovement = touch.timestamp
+                current.targetIsZero = target == 0
             }
-
-            control.lastPoint = touch
-            controls[touch.identity] = control
+            current.lastPoint = touch
+            control = current
         }
 
-        return actions
+        return action.map { [$0] } ?? []
     }
 
     private mutating func touchesEnded(_ identities: [TouchID]) -> [DJAction] {
@@ -150,64 +109,73 @@ struct GestureStateMachine {
 
         for identity in identities.sorted() {
             session = session.removing(identity: identity)
-            guard let control = controls.removeValue(forKey: identity) else { continue }
-            controllingTouchByZone.removeValue(forKey: control.zone)
-            if let deck = Self.deck(for: control.zone) {
-                actions.append(.endScratch(deck))
+            if let current = control, current.identity == identity {
+                actions.append(endAction(deck: current.deck, mode: current.mode))
+                control = nil
             }
         }
 
+        if session.count == 0 {
+            controllerClaimedForSession = false
+        }
         return actions
     }
 
     private mutating func cancelAll() -> [DJAction] {
-        let actions = controls
-            .sorted { $0.key < $1.key }
-            .compactMap { Self.deck(for: $0.value.zone).map(DJAction.endScratch) }
+        let actions = control.map { [endAction(deck: $0.deck, mode: $0.mode)] } ?? []
         session = .empty
-        controls.removeAll(keepingCapacity: true)
-        controllingTouchByZone.removeAll(keepingCapacity: true)
+        control = nil
+        controllerClaimedForSession = false
         return actions
     }
 
     private mutating func advanceTime(to timestamp: TimeInterval) -> [DJAction] {
-        var actions: [DJAction] = []
-
-        for identity in controls.keys.sorted() {
-            guard var control = controls[identity],
-                  control.axis == .vertical,
-                  !control.scratchTargetIsZero,
-                  let lastMovement = control.lastScratchMovement,
-                  timestamp - lastMovement >= configuration.stationaryTimeout,
-                  let deck = Self.deck(for: control.zone) else { continue }
-
-            control.scratchTargetIsZero = true
-            controls[identity] = control
-            actions.append(.setScratch(deck, 0))
+        guard var current = control,
+              !current.targetIsZero,
+              let lastMovement = current.lastMovement,
+              timestamp - lastMovement >= configuration.stationaryTimeout else {
+            return []
         }
 
-        return actions
+        current.targetIsZero = true
+        control = current
+        return [updateAction(deck: current.deck, mode: current.mode, value: 0)]
     }
 
-    private func lockedAxis(from origin: CGPoint, to current: CGPoint) -> Axis? {
-        let deltaX = abs(current.x - origin.x)
-        let deltaY = abs(current.y - origin.y)
-        guard max(deltaX, deltaY) >= configuration.axisLockDistance else { return nil }
-
-        if deltaX >= deltaY * configuration.dominanceRatio {
-            return .horizontal
+    private func targetValue(velocity: Double, mode: JogMode) -> Double {
+        switch mode {
+        case .scratch:
+            return clamp(
+                velocity * configuration.scratchSensitivity,
+                to: configuration.scratchRange
+            )
+        case .pitchBend:
+            return clamp(
+                velocity * configuration.bendSensitivity,
+                to: configuration.bendRange
+            )
         }
-        if deltaY >= deltaX * configuration.dominanceRatio {
-            return .vertical
-        }
-        return nil
     }
 
-    private static func deck(for zone: Zone.Name) -> DeckID? {
-        switch zone {
-        case .deckA: return .a
-        case .deckB: return .b
-        case .topStrip, .bottomStrip: return nil
+    private func clamp(_ value: Double, to range: ClosedRange<Double>) -> Double {
+        min(range.upperBound, max(range.lowerBound, value))
+    }
+
+    private func startAction(deck: DeckID, mode: JogMode) -> DJAction {
+        updateAction(deck: deck, mode: mode, value: 0)
+    }
+
+    private func updateAction(deck: DeckID, mode: JogMode, value: Double) -> DJAction {
+        switch mode {
+        case .scratch: return .setScratch(deck, value)
+        case .pitchBend: return .setPitchBend(deck, value)
+        }
+    }
+
+    private func endAction(deck: DeckID, mode: JogMode) -> DJAction {
+        switch mode {
+        case .scratch: return .endScratch(deck)
+        case .pitchBend: return .endPitchBend(deck)
         }
     }
 

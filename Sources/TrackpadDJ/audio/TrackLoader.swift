@@ -22,6 +22,19 @@ struct LoadedTrack: @unchecked Sendable {
     let name: String
     let audio: DeckAudioData
     let waveformSamples: [Float]
+    let beatGrid: BeatGrid?
+
+    init(
+        name: String,
+        audio: DeckAudioData,
+        waveformSamples: [Float],
+        beatGrid: BeatGrid? = nil
+    ) {
+        self.name = name
+        self.audio = audio
+        self.waveformSamples = waveformSamples
+        self.beatGrid = beatGrid
+    }
 
     var duration: TimeInterval {
         audio.frameLength / audio.format.sampleRate
@@ -63,7 +76,8 @@ struct TrackLoader: TrackLoading, Sendable {
         return LoadedTrack(
             name: url.deletingPathExtension().lastPathComponent,
             audio: audio,
-            waveformSamples: downsample(buffer, targetCount: 800)
+            waveformSamples: downsample(buffer, targetCount: 800),
+            beatGrid: BeatGridAnalyzer.analyze(buffer)
         )
     }
 

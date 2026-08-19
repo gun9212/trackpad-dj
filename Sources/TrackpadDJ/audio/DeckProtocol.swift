@@ -32,10 +32,20 @@ protocol DeckProtocol: AnyObject {
 
     func setScratch(rate: Double)
     func endScratch()
+    func setPitchBendPercent(_ value: Double)
+    func endPitchBend()
     func setTempoPercent(_ value: Double)
     func adjustTempoPercent(by delta: Double)
     func resetTempo()
     var tempoPercent: Double { get }
+    var pitchBendPercent: Double { get }
+
+    // MARK: - Beat Grid
+
+    var beatGrid: BeatGrid? { get }
+    var automaticBeatGrid: BeatGrid? { get }
+    func applyBeatGrid(_ beatGrid: BeatGrid?)
+    func restoreAutomaticBeatGrid()
 
     // MARK: - Waveform
 

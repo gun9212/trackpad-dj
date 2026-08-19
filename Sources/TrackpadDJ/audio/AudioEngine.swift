@@ -1,5 +1,29 @@
 import AVFoundation
 
+enum SyncFailure: Equatable, Sendable {
+    case activeDeckBPMMissing
+    case referenceDeckBPMMissing
+    case requiredTempoOutOfRange(Double)
+}
+
+enum SyncResult: Equatable, Sendable {
+    case matched(tempoPercent: Double, targetBPM: Double)
+    case failed(SyncFailure)
+
+    var statusMessage: String {
+        switch self {
+        case .matched(let tempoPercent, let targetBPM):
+            return String(format: "SYNC %.1f BPM · TEMPO %+.2f%%", targetBPM, tempoPercent)
+        case .failed(.activeDeckBPMMissing):
+            return "SYNC FAILED · ACTIVE DECK BPM UNAVAILABLE"
+        case .failed(.referenceDeckBPMMissing):
+            return "SYNC FAILED · OTHER DECK BPM UNAVAILABLE"
+        case .failed(.requiredTempoOutOfRange(let value)):
+            return String(format: "SYNC FAILED · REQUIRED TEMPO %+.2f%%", value)
+        }
+    }
+}
+
 /// Main-actor owner of the two deck graphs and their output routing.
 @MainActor
 final class AudioEngine {
@@ -33,6 +57,8 @@ final class AudioEngine {
     // Current lowpass cutoff per deck [200, 20_000] Hz.
     private var cutoffA: Float = 20_000
     private var cutoffB: Float = 20_000
+    private var bpmTapA = BPMTapState()
+    private var bpmTapB = BPMTapState()
 
     // Deck channel faders [0, 1]. Combined with crossfader for master volume.
     private(set) var faderA: Float = 1.0
@@ -330,6 +356,7 @@ final class AudioEngine {
     func snapshot(for deckID: DeckID) -> DeckSnapshot {
         let deck = deckID == .a ? _deckA : _deckB
         let cutoff = deckID == .a ? cutoffA : cutoffB
+        let beatGrid = deck.beatGrid
         return DeckSnapshot(
             deck: deckID,
             trackName: deck.trackName,
@@ -338,6 +365,11 @@ final class AudioEngine {
             extendedProgress: deck.extendedProgress,
             duration: deck.duration,
             tempoPercent: deck.tempoPercent,
+            pitchBendPercent: deck.pitchBendPercent,
+            bpm: beatGrid?.bpm,
+            firstBeatTime: beatGrid?.firstBeatTime,
+            beatGridSource: beatGrid?.source,
+            beatConfidence: beatGrid?.confidence,
             waveformSamples: deck.waveformSamples,
             faderLevel: deckID == .a ? faderA : faderB,
             filterLevel: normalizedFilterLevel(for: cutoff),
@@ -369,6 +401,61 @@ final class AudioEngine {
         target.resetTempo()
     }
 
+    func syncTempo(activeDeck: DeckID) -> SyncResult {
+        let active = deck(for: activeDeck)
+        let reference = deck(for: activeDeck.other)
+        guard let activeBPM = active.beatGrid?.bpm else {
+            return .failed(.activeDeckBPMMissing)
+        }
+        guard let referenceBPM = reference.beatGrid?.bpm else {
+            return .failed(.referenceDeckBPMMissing)
+        }
+
+        let targetBPM = referenceBPM * (1 + reference.tempoPercent / 100)
+        let requiredTempo = (targetBPM / activeBPM - 1) * 100
+        guard requiredTempo.isFinite, (-8.0...8.0).contains(requiredTempo) else {
+            return .failed(.requiredTempoOutOfRange(requiredTempo))
+        }
+
+        active.setTempoPercent(requiredTempo)
+        return .matched(tempoPercent: requiredTempo, targetBPM: targetBPM)
+    }
+
+    // MARK: - BPM
+
+    func tapBPM(deck deckID: DeckID, at timestamp: TimeInterval) {
+        let target = deck(for: deckID)
+        guard target.duration > 0 else { return }
+
+        let playbackTime = target.extendedProgress * target.duration
+        switch deckID {
+        case .a:
+            bpmTapA.tap(at: timestamp, progress: playbackTime)
+            applyTapGrid(bpmTapA, to: target)
+        case .b:
+            bpmTapB.tap(at: timestamp, progress: playbackTime)
+            applyTapGrid(bpmTapB, to: target)
+        }
+    }
+
+    func restoreAutomaticBPM(deck deckID: DeckID) {
+        switch deckID {
+        case .a: bpmTapA.reset()
+        case .b: bpmTapB.reset()
+        }
+        deck(for: deckID).restoreAutomaticBeatGrid()
+    }
+
+    private func applyTapGrid(_ tap: BPMTapState, to deck: Deck) {
+        guard tap.tapTimes.count >= 2, tap.bpm > 0 else { return }
+        deck.applyBeatGrid(BeatGrid(
+            bpm: tap.bpm,
+            firstBeatTime: tap.beatOffset,
+            confidence: 1,
+            source: .tap
+        ))
+    }
+
     // MARK: - Track Loading
 
     func loadTrack(url: URL, deck: DeckID) async throws -> TrackLoadResult {
@@ -385,6 +472,10 @@ final class AudioEngine {
                 engine.detach(oldSource)
             }
             target.install(track)
+            switch deck {
+            case .a: bpmTapA.reset()
+            case .b: bpmTapB.reset()
+            }
 
             guard let source = target.sourceNode,
                   let format = target.processingFormat else {
@@ -426,6 +517,14 @@ final class AudioEngine {
         (deck == .a ? _deckA : _deckB).endScratch()
     }
 
+    func setPitchBend(deck: DeckID, percent: Double) {
+        (deck == .a ? _deckA : _deckB).setPitchBendPercent(percent)
+    }
+
+    func endPitchBend(deck: DeckID) {
+        (deck == .a ? _deckA : _deckB).endPitchBend()
+    }
+
     func setFilter(deck: DeckID, deltaY: Float) {
         let target = deck == .a ? _deckA : _deckB
         var cutoff = deck == .a ? cutoffA : cutoffB
@@ -434,5 +533,9 @@ final class AudioEngine {
 
         if deck == .a { cutoffA = cutoff } else { cutoffB = cutoff }
         target.eqNode.bands[0].frequency = cutoff
+    }
+
+    private func deck(for deckID: DeckID) -> Deck {
+        deckID == .a ? _deckA : _deckB
     }
 }

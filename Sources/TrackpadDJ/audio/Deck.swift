@@ -24,6 +24,7 @@ final class DeckRenderer: @unchecked Sendable {
     private var readPosition: Double
     private var consumedSeekGeneration: UInt64
     private var smoothedRate: Double = 1
+    private var wasScratchActive = false
 
     init(audio: DeckAudioData, state: DeckRealtimeState) {
         self.audio = audio
@@ -56,13 +57,17 @@ final class DeckRenderer: @unchecked Sendable {
         }
 
         isSilence.pointee = false
-        let normalRate = 1 + state.tempoPercent / 100
+        let normalRate = state.normalPlaybackRate
         let alpha = 0.3
         if isScratchActive {
+            if !wasScratchActive {
+                smoothedRate = 0
+            }
             smoothedRate = smoothedRate * (1 - alpha) + state.targetScratchRate * alpha
         } else {
             smoothedRate = normalRate
         }
+        wasScratchActive = isScratchActive
         let advance = isScratchActive ? smoothedRate : normalRate
 
         let sourceChannelCount = Int(audio.format.channelCount)
@@ -161,6 +166,8 @@ final class Deck: DeckProtocol {
     private(set) var processingFormat: AVAudioFormat?
     private(set) var trackName: String?
     private(set) var waveformSamples: [Float] = []
+    private(set) var beatGrid: BeatGrid?
+    private(set) var automaticBeatGrid: BeatGrid?
 
     private var realtimeState = DeckRealtimeState()
     private var audioData: DeckAudioData?
@@ -199,6 +206,10 @@ final class Deck: DeckProtocol {
         realtimeState.tempoPercent
     }
 
+    var pitchBendPercent: Double {
+        realtimeState.pitchBendPercent
+    }
+
     func install(_ track: LoadedTrack) {
         let state = DeckRealtimeState()
         state.reset(initialPosition: -track.audio.preRollFrames)
@@ -208,6 +219,8 @@ final class Deck: DeckProtocol {
         trackName = track.name
         processingFormat = track.audio.format
         waveformSamples = track.waveformSamples
+        automaticBeatGrid = track.beatGrid
+        beatGrid = track.beatGrid
         audioData = track.audio
         self.renderer = renderer
         sourceNode = AVAudioSourceNode(format: track.audio.format) { isSilence, _, frameCount, buffers in
@@ -248,6 +261,14 @@ final class Deck: DeckProtocol {
         realtimeState.setScratch(active: false, rate: 0)
     }
 
+    func setPitchBendPercent(_ value: Double) {
+        realtimeState.setPitchBendPercent(value)
+    }
+
+    func endPitchBend() {
+        realtimeState.setPitchBendPercent(0)
+    }
+
     func setTempoPercent(_ value: Double) {
         realtimeState.setTempoPercent(value)
     }
@@ -258,6 +279,14 @@ final class Deck: DeckProtocol {
 
     func resetTempo() {
         setTempoPercent(0)
+    }
+
+    func applyBeatGrid(_ beatGrid: BeatGrid?) {
+        self.beatGrid = beatGrid
+    }
+
+    func restoreAutomaticBeatGrid() {
+        beatGrid = automaticBeatGrid
     }
 
 }

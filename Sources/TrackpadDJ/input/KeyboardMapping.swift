@@ -2,23 +2,26 @@ import Foundation
 
 enum KeyboardMapping {
 
-    static func oneShotAction(for keyCode: UInt16, shift: Bool) -> DJAction? {
+    static func oneShotAction(
+        for keyCode: UInt16,
+        shift: Bool,
+        activeDeck: DeckID
+    ) -> DJAction? {
         switch keyCode {
-        case 123: return .stepCrossfader(-1) // Left arrow
-        case 124: return .stepCrossfader(1)  // Right arrow
-        case 12: return .load(.a)            // Q
-        case 13: return .load(.b)            // W
-        case 0: return .togglePlay(.a)       // A
-        case 1: return .togglePlay(.b)       // S
-        case 6: return .cue(.a)              // Z
-        case 7: return .cue(.b)              // X
-        case 11: return .tapBPM(.a)          // B
-        case 45: return .tapBPM(.b)          // N
-        case 23: return .resetTempo(.a)       // 5
-        case 22: return .resetTempo(.b)       // 6
-        case 8: return .toggleMonitor(.a)     // C
-        case 9: return .toggleMonitor(.b)     // V
-        case 46: return .toggleOutputMode     // M
+        case 48: return .selectActiveDeck(activeDeck.other) // Tab
+        case 123: return .stepCrossfader(-1)                // Left arrow
+        case 124: return .stepCrossfader(1)                 // Right arrow
+        case 12: return .load(activeDeck)                    // Q
+        case 49: return .togglePlay(activeDeck)              // Space
+        case 8: return .cue(activeDeck)                      // C
+        case 1: return .syncTempo(activeDeck)                // S
+        case 23: return .resetTempo(activeDeck)              // 5
+        case 11:                                             // B / Shift+B
+            return shift ? .restoreAutomaticBPM(activeDeck) : .tapBPM(activeDeck)
+        case 9: return .toggleMonitor(activeDeck)            // V
+        case 46: return .toggleOutputMode                    // M
+        case 35: return .toggleCursorLock                    // P
+        case 53: return .cancelJogAndUnlock                  // Escape
         default:
             return nil
         }
@@ -34,115 +37,118 @@ enum KeyboardMapping {
         hasSystemModifier: Bool = false
     ) -> Bool {
         guard !hasSystemModifier else { return false }
-        return oneShotAction(for: keyCode, shift: shift) != nil || isHeldKey(keyCode)
+        return oneShotAction(for: keyCode, shift: shift, activeDeck: .a) != nil
+            || isHeldKey(keyCode)
     }
 
     private static let heldKeyCodes: Set<UInt16> = [
-        14, 2, 15, 3,       // Volume: E/D, R/F
-        17, 5, 16, 4,       // Filter: T/G, Y/H
-        126, 125, 34, 40,   // Nudge: Up/Down, I/K
-        32, 38, 31, 37,     // Tempo: U/J, O/L
+        14, 2,       // Volume: E/D
+        15, 3,       // Filter: R/F
+        17, 5,       // Tempo: T/G
+        126, 125,    // Nudge: Up/Down
     ]
 }
 
 struct KeyboardStateMachine {
 
+    private(set) var activeDeck: DeckID = .a
     private(set) var pressedKeys: Set<UInt16> = []
+    private var heldDeckByKey: [UInt16: DeckID] = [:]
 
     mutating func keyDown(keyCode: UInt16, isRepeat: Bool, shift: Bool) -> [DJAction] {
-        let oneShot = KeyboardMapping.oneShotAction(for: keyCode, shift: shift)
+        let oneShot = KeyboardMapping.oneShotAction(
+            for: keyCode,
+            shift: shift,
+            activeDeck: activeDeck
+        )
         guard oneShot != nil || KeyboardMapping.isHeldKey(keyCode) else { return [] }
 
         let inserted = pressedKeys.insert(keyCode).inserted
-        guard inserted, !isRepeat, let oneShot else { return [] }
+        guard inserted, !isRepeat else { return [] }
+
+        if KeyboardMapping.isHeldKey(keyCode) {
+            heldDeckByKey[keyCode] = activeDeck
+            return []
+        }
+
+        guard let oneShot else { return [] }
+        if case .selectActiveDeck(let deck) = oneShot {
+            activeDeck = deck
+        }
         return [oneShot]
     }
 
     mutating func keyUp(keyCode: UInt16) {
         pressedKeys.remove(keyCode)
+        heldDeckByKey.removeValue(forKey: keyCode)
     }
 
     mutating func focusLost() {
         pressedKeys.removeAll(keepingCapacity: true)
+        heldDeckByKey.removeAll(keepingCapacity: true)
     }
 
     func heldActions() -> [DJAction] {
         var actions: [DJAction] = []
-        appendHeldAction(
-            positiveKey: 14, negativeKey: 2,
-            scale: 0.008,
-            makeAction: { .adjustVolume(.a, $0) },
-            to: &actions
-        )
-        appendHeldAction(
-            positiveKey: 15, negativeKey: 3,
-            scale: 0.008,
-            makeAction: { .adjustVolume(.b, $0) },
-            to: &actions
-        )
-        appendHeldAction(
-            positiveKey: 17, negativeKey: 5,
-            scale: 0.003,
-            makeAction: { .adjustFilter(.a, $0) },
-            to: &actions
-        )
-        appendHeldAction(
-            positiveKey: 16, negativeKey: 4,
-            scale: 0.003,
-            makeAction: { .adjustFilter(.b, $0) },
-            to: &actions
-        )
-        appendHeldAction(
-            positiveKey: 126, negativeKey: 125,
-            scale: 0.001,
-            makeAction: { .nudge(.a, $0) },
-            to: &actions
-        )
-        appendHeldAction(
-            positiveKey: 34, negativeKey: 40,
-            scale: 0.001,
-            makeAction: { .nudge(.b, $0) },
-            to: &actions
-        )
-        appendHeldTempoAction(
-            positiveKey: 32, negativeKey: 38,
-            deck: .a,
-            to: &actions
-        )
-        appendHeldTempoAction(
-            positiveKey: 31, negativeKey: 37,
-            deck: .b,
-            to: &actions
-        )
+        for deck in [DeckID.a, .b] {
+            appendHeldAction(
+                positiveKey: 14, negativeKey: 2,
+                deck: deck,
+                scale: 0.008,
+                makeAction: DJAction.adjustVolume,
+                to: &actions
+            )
+            appendHeldAction(
+                positiveKey: 15, negativeKey: 3,
+                deck: deck,
+                scale: 0.003,
+                makeAction: DJAction.adjustFilter,
+                to: &actions
+            )
+            appendHeldAction(
+                positiveKey: 126, negativeKey: 125,
+                deck: deck,
+                scale: 0.001,
+                makeAction: DJAction.nudge,
+                to: &actions
+            )
+            let tempoDirection = heldDirection(
+                positiveKey: 17,
+                negativeKey: 5,
+                deck: deck
+            )
+            if tempoDirection != 0 {
+                actions.append(.adjustTempo(deck, Double(tempoDirection) * 0.05))
+            }
+        }
         return actions
     }
 
-    private func appendHeldTempoAction(
+    private func heldDirection(
         positiveKey: UInt16,
         negativeKey: UInt16,
-        deck: DeckID,
-        to actions: inout [DJAction]
-    ) {
-        let positive = pressedKeys.contains(positiveKey) ? 1.0 : 0.0
-        let negative = pressedKeys.contains(negativeKey) ? 1.0 : 0.0
-        let direction = positive - negative
-        if direction != 0 {
-            actions.append(.adjustTempo(deck, direction * 0.05))
-        }
+        deck: DeckID
+    ) -> Float {
+        let positive: Float = heldDeckByKey[positiveKey] == deck ? 1 : 0
+        let negative: Float = heldDeckByKey[negativeKey] == deck ? 1 : 0
+        return positive - negative
     }
 
     private func appendHeldAction(
         positiveKey: UInt16,
         negativeKey: UInt16,
+        deck: DeckID,
         scale: Float,
-        makeAction: (Float) -> DJAction,
+        makeAction: (DeckID, Float) -> DJAction,
         to actions: inout [DJAction]
     ) {
-        let positive: Float = pressedKeys.contains(positiveKey) ? 1 : 0
-        let negative: Float = pressedKeys.contains(negativeKey) ? 1 : 0
-        let direction = positive - negative
+        let direction = heldDirection(
+            positiveKey: positiveKey,
+            negativeKey: negativeKey,
+            deck: deck
+        )
         if direction != 0 {
-            actions.append(makeAction(direction * scale))
+            actions.append(makeAction(deck, direction * scale))
         }
     }
 }

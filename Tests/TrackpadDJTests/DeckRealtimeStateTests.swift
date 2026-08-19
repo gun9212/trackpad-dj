@@ -37,6 +37,18 @@ final class DeckRealtimeStateTests: XCTestCase {
         XCTAssertEqual(state.tempoPercent, -8)
     }
 
+    func testPitchBendIsClampedAndCombinesWithTempo() {
+        let state = DeckRealtimeState()
+        state.setTempoPercent(5)
+        state.setPitchBendPercent(20)
+        XCTAssertEqual(state.pitchBendPercent, 8)
+        XCTAssertEqual(state.normalPlaybackRate, 1.13, accuracy: 0.000_001)
+
+        state.setPitchBendPercent(-20)
+        XCTAssertEqual(state.pitchBendPercent, -8)
+        XCTAssertEqual(state.normalPlaybackRate, 0.97, accuracy: 0.000_001)
+    }
+
     func testRendererClampsAtTrackEndAndStopsPlayback() throws {
         let format = try XCTUnwrap(AVAudioFormat(
             commonFormat: .pcmFormatFloat32,
@@ -102,6 +114,7 @@ final class DeckRealtimeStateTests: XCTestCase {
         let state = DeckRealtimeState()
         state.reset(initialPosition: 0)
         state.setTempoPercent(8)
+        state.setPitchBendPercent(-3)
         state.setPlaying(true)
         let renderer = DeckRenderer(
             audio: DeckAudioData(buffer: source, format: format, preRollFrames: 0),
@@ -119,7 +132,7 @@ final class DeckRealtimeStateTests: XCTestCase {
             frameCount: 10,
             audioBufferList: output.mutableAudioBufferList
         ), noErr)
-        XCTAssertEqual(state.publicReadPosition, 10.8, accuracy: 0.000_001)
+        XCTAssertEqual(state.publicReadPosition, 10.5, accuracy: 0.000_001)
 
         state.setScratch(active: true, rate: 0)
         _ = renderer.render(
@@ -128,7 +141,7 @@ final class DeckRealtimeStateTests: XCTestCase {
             audioBufferList: output.mutableAudioBufferList
         )
         let positionAfterScratch = state.publicReadPosition
-        XCTAssertLessThan(positionAfterScratch, 20.8)
+        XCTAssertEqual(positionAfterScratch, 10.5, accuracy: 0.000_001)
 
         state.setScratch(active: false, rate: 0)
         _ = renderer.render(
@@ -138,8 +151,44 @@ final class DeckRealtimeStateTests: XCTestCase {
         )
         XCTAssertEqual(
             state.publicReadPosition - positionAfterScratch,
-            10.8,
+            10.5,
             accuracy: 0.000_001
         )
+    }
+
+    func testPitchBendDoesNotMoveStoppedDeck() throws {
+        let format = try XCTUnwrap(AVAudioFormat(
+            commonFormat: .pcmFormatFloat32,
+            sampleRate: 8_000,
+            channels: 1,
+            interleaved: false
+        ))
+        let source = try XCTUnwrap(AVAudioPCMBuffer(
+            pcmFormat: format,
+            frameCapacity: 100
+        ))
+        source.frameLength = 100
+        let state = DeckRealtimeState()
+        state.reset(initialPosition: 10)
+        state.setPitchBendPercent(8)
+        let renderer = DeckRenderer(
+            audio: DeckAudioData(buffer: source, format: format, preRollFrames: 0),
+            state: state
+        )
+        _ = state.requestSeek(to: 10)
+        let output = try XCTUnwrap(AVAudioPCMBuffer(
+            pcmFormat: format,
+            frameCapacity: 10
+        ))
+        output.frameLength = 10
+        var isSilence = ObjCBool(false)
+
+        XCTAssertEqual(renderer.render(
+            isSilence: &isSilence,
+            frameCount: 10,
+            audioBufferList: output.mutableAudioBufferList
+        ), noErr)
+        XCTAssertTrue(isSilence.boolValue)
+        XCTAssertEqual(state.publicReadPosition, 10)
     }
 }

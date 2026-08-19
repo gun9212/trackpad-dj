@@ -12,12 +12,14 @@ final class SnapshotTests: XCTestCase {
         XCTAssertEqual(initial, .empty(deck: .a))
 
         engine.adjustTempo(deck: .a, by: 2.5)
+        engine.setPitchBend(deck: .a, percent: -3)
         engine.setFader(deck: .a, deltaY: -0.25)
         engine.setFilter(deck: .a, deltaY: -0.5)
         engine.toggleMonitor(deck: .a)
 
         let updated = engine.snapshot(for: .a)
         XCTAssertEqual(updated.tempoPercent, 2.5)
+        XCTAssertEqual(updated.pitchBendPercent, -3)
         XCTAssertEqual(updated.faderLevel, 0.75)
         XCTAssertEqual(updated.filterLevel, 0.5, accuracy: 0.000_001)
         XCTAssertTrue(updated.monitorEnabled)

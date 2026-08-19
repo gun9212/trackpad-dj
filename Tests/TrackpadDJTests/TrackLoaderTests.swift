@@ -16,6 +16,41 @@ final class TrackLoaderTests: XCTestCase {
         XCTAssertEqual(track.audio.buffer.frameLength, 80)
         XCTAssertEqual(track.waveformSamples.count, 800)
         XCTAssertTrue(track.waveformSamples.contains { $0 > 0 })
+        XCTAssertNil(track.beatGrid)
+    }
+
+    func testBeatAnalyzerFindsSyntheticClickTemposAndLeadingSilence() throws {
+        for bpm in [90.0, 120.0, 150.0] {
+            let buffer = try makeClickBuffer(bpm: bpm, leadingSilence: 1.25)
+            let grid = try XCTUnwrap(BeatGridAnalyzer.analyze(buffer), "Missing grid for \(bpm) BPM")
+
+            XCTAssertEqual(grid.bpm, bpm, accuracy: 1.0)
+            XCTAssertEqual(grid.firstBeatTime, 1.25, accuracy: 0.025)
+            XCTAssertGreaterThanOrEqual(grid.confidence, BeatGridAnalyzer.minimumConfidence)
+            XCTAssertEqual(grid.source, .automatic)
+        }
+    }
+
+    func testBeatAnalyzerRejectsShortAndLowConfidenceSignals() throws {
+        XCTAssertNil(BeatGridAnalyzer.analyze(
+            try makeClickBuffer(bpm: 120, leadingSilence: 0, duration: 7.9)
+        ))
+
+        let constant = try XCTUnwrap(AVAudioPCMBuffer(
+            pcmFormat: try XCTUnwrap(AVAudioFormat(
+                commonFormat: .pcmFormatFloat32,
+                sampleRate: 2_000,
+                channels: 1,
+                interleaved: false
+            )),
+            frameCapacity: 20_000
+        ))
+        constant.frameLength = 20_000
+        let samples = try XCTUnwrap(constant.floatChannelData?[0])
+        for frame in 0..<20_000 {
+            samples[frame] = 0.1
+        }
+        XCTAssertNil(BeatGridAnalyzer.analyze(constant))
     }
 
     @MainActor
@@ -108,6 +143,37 @@ final class TrackLoaderTests: XCTestCase {
             ),
             waveformSamples: Array(repeating: 0, count: 800)
         )
+    }
+
+    private func makeClickBuffer(
+        bpm: Double,
+        leadingSilence: TimeInterval,
+        duration: TimeInterval = 12,
+        sampleRate: Double = 2_000
+    ) throws -> AVAudioPCMBuffer {
+        let format = try XCTUnwrap(AVAudioFormat(
+            commonFormat: .pcmFormatFloat32,
+            sampleRate: sampleRate,
+            channels: 1,
+            interleaved: false
+        ))
+        let frameCount = AVAudioFrameCount((duration * sampleRate).rounded())
+        let buffer = try XCTUnwrap(AVAudioPCMBuffer(
+            pcmFormat: format,
+            frameCapacity: frameCount
+        ))
+        buffer.frameLength = frameCount
+        let samples = try XCTUnwrap(buffer.floatChannelData?[0])
+
+        var beatTime = leadingSilence
+        while beatTime < duration {
+            let start = Int((beatTime * sampleRate).rounded())
+            for offset in 0..<5 where start + offset < Int(frameCount) {
+                samples[start + offset] = 1 - Float(offset) * 0.15
+            }
+            beatTime += 60 / bpm
+        }
+        return buffer
     }
 }
 

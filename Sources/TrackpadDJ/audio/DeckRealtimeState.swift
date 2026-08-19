@@ -13,6 +13,7 @@ final class DeckRealtimeState: @unchecked Sendable {
     private let scratchActive = ManagedAtomic<Bool>(false)
     private let scratchRate = AtomicDouble(0)
     private let tempo = AtomicDouble(0)
+    private let pitchBend = AtomicDouble(0)
     private let publishedPosition = AtomicDouble(0)
     private let seekTarget = AtomicDouble(0)
     private let seekGeneration = ManagedAtomic<UInt64>(0)
@@ -31,6 +32,14 @@ final class DeckRealtimeState: @unchecked Sendable {
 
     var tempoPercent: Double {
         tempo.load()
+    }
+
+    var pitchBendPercent: Double {
+        pitchBend.load()
+    }
+
+    var normalPlaybackRate: Double {
+        1 + (tempoPercent + pitchBendPercent) / 100
     }
 
     var publicReadPosition: Double {
@@ -70,6 +79,10 @@ final class DeckRealtimeState: @unchecked Sendable {
         tempo.store(min(8, max(-8, value)))
     }
 
+    func setPitchBendPercent(_ value: Double) {
+        pitchBend.store(min(8, max(-8, value)))
+    }
+
     @discardableResult
     func requestSeek(to targetFrame: Double) -> UInt64 {
         seekTarget.store(targetFrame)
@@ -94,6 +107,7 @@ final class DeckRealtimeState: @unchecked Sendable {
         scratchRate.store(0)
         scratchActive.store(false, ordering: .relaxed)
         tempo.store(0)
+        pitchBend.store(0)
         publishedPosition.store(initialPosition)
         requestSeek(to: initialPosition)
     }

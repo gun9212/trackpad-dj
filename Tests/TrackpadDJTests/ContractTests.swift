@@ -7,19 +7,23 @@ final class ContractTests: XCTestCase {
     func testCurrentKeyboardMapping() {
         XCTAssertEqual(command(123), .stepCrossfader(-1))
         XCTAssertEqual(command(124), .stepCrossfader(1))
+        XCTAssertEqual(command(48), .selectActiveDeck(.b))
         XCTAssertEqual(command(12), .load(.a))
-        XCTAssertEqual(command(13), .load(.b))
-        XCTAssertEqual(command(0), .togglePlay(.a))
-        XCTAssertEqual(command(1), .togglePlay(.b))
-        XCTAssertEqual(command(6), .cue(.a))
-        XCTAssertEqual(command(7), .cue(.b))
+        XCTAssertEqual(command(12, activeDeck: .b), .load(.b))
+        XCTAssertEqual(command(49), .togglePlay(.a))
+        XCTAssertEqual(command(8), .cue(.a))
+        XCTAssertEqual(command(1), .syncTempo(.a))
         XCTAssertEqual(command(11), .tapBPM(.a))
-        XCTAssertEqual(command(45), .tapBPM(.b))
-        XCTAssertEqual(command(23), .resetTempo(.a))
-        XCTAssertEqual(command(22), .resetTempo(.b))
-        XCTAssertEqual(command(8), .toggleMonitor(.a))
-        XCTAssertEqual(command(9), .toggleMonitor(.b))
+        XCTAssertEqual(command(11, shift: true), .restoreAutomaticBPM(.a))
+        XCTAssertEqual(command(23, activeDeck: .b), .resetTempo(.b))
+        XCTAssertEqual(command(9), .toggleMonitor(.a))
         XCTAssertEqual(command(46), .toggleOutputMode)
+        XCTAssertEqual(command(35), .toggleCursorLock)
+        XCTAssertEqual(command(53), .cancelJogAndUnlock)
+        XCTAssertNil(command(13))
+        XCTAssertNil(command(0))
+        XCTAssertNil(command(6))
+        XCTAssertNil(command(45))
         XCTAssertNil(command(18))
         XCTAssertNil(command(21, shift: true))
         XCTAssertNil(command(26))
@@ -27,11 +31,11 @@ final class ContractTests: XCTestCase {
         XCTAssertFalse(KeyboardMapping.handles(18, shift: false))
         XCTAssertFalse(KeyboardMapping.handles(29, shift: true))
         XCTAssertFalse(KeyboardMapping.handles(12, shift: false, hasSystemModifier: true))
-        XCTAssertFalse(KeyboardMapping.handles(13, shift: false, hasSystemModifier: true))
+        XCTAssertFalse(KeyboardMapping.handles(49, shift: false, hasSystemModifier: true))
         XCTAssertTrue(KeyboardMapping.isHeldKey(14))
-        XCTAssertTrue(KeyboardMapping.isHeldKey(40))
-        XCTAssertTrue(KeyboardMapping.isHeldKey(32))
-        XCTAssertTrue(KeyboardMapping.isHeldKey(37))
+        XCTAssertTrue(KeyboardMapping.isHeldKey(3))
+        XCTAssertTrue(KeyboardMapping.isHeldKey(17))
+        XCTAssertTrue(KeyboardMapping.isHeldKey(125))
     }
 
     func testEqualPowerCrossfaderCurve() {
@@ -55,14 +59,6 @@ final class ContractTests: XCTestCase {
         state.tap(at: 13.1, progress: 0.8)
         XCTAssertEqual(state.tapTimes.count, 1)
         XCTAssertEqual(state.beatOffset, 0.8, accuracy: 0.0001)
-    }
-
-    func testZoneLayoutContract() {
-        XCTAssertEqual(ZoneLayout.zone(for: CGPoint(x: 0.25, y: 0.9))?.name, .topStrip)
-        XCTAssertEqual(ZoneLayout.zone(for: CGPoint(x: 0.25, y: 0.5))?.name, .deckA)
-        XCTAssertEqual(ZoneLayout.zone(for: CGPoint(x: 0.75, y: 0.5))?.name, .deckB)
-        XCTAssertEqual(ZoneLayout.zone(for: CGPoint(x: 0.5, y: 0.05))?.name, .bottomStrip)
-        XCTAssertNil(ZoneLayout.zone(for: CGPoint(x: 1.1, y: 0.5)))
     }
 
     @MainActor
@@ -106,8 +102,16 @@ final class ContractTests: XCTestCase {
         XCTAssertEqual(deck.extendedProgress, -20, accuracy: 0.001)
     }
 
-    private func command(_ keyCode: UInt16, shift: Bool = false) -> DJAction? {
-        KeyboardMapping.oneShotAction(for: keyCode, shift: shift)
+    private func command(
+        _ keyCode: UInt16,
+        shift: Bool = false,
+        activeDeck: DeckID = .a
+    ) -> DJAction? {
+        KeyboardMapping.oneShotAction(
+            for: keyCode,
+            shift: shift,
+            activeDeck: activeDeck
+        )
     }
 
     private func assertGains(

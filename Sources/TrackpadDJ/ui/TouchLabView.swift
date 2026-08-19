@@ -1,6 +1,6 @@
 import AppKit
 
-/// Renders the Touch Lab: zone boundaries and live touch point visualization.
+/// Renders two deck waveforms and translates keyboard / trackpad input into DJ actions.
 @MainActor
 final class TouchLabView: NSView {
 
@@ -10,53 +10,45 @@ final class TouchLabView: NSView {
 
     private var gestureStateMachine = GestureStateMachine()
     private var keyboardStateMachine = KeyboardStateMachine()
+    private let cursorLockController = CursorLockController()
     private var touchIDs: [NSObject: TouchID] = [:]
     private var nextTouchID: UInt64 = 1
     private var inputTimer: Timer?
     private weak var observedWindow: NSWindow?
 
-    private let crossfaderModeValues: [Float] = [0.0, 0.5, 1.0]
-
-    // MARK: - Action Callback (set by ViewController)
+    private let crossfaderModeValues: [Float] = [0, 0.5, 1]
 
     var onAction: ((DJAction) -> Void)?
-
-    // MARK: - Display State (updated atomically by ViewController)
 
     private(set) var deckASnapshot = DeckSnapshot.empty(deck: .a)
     private(set) var deckBSnapshot = DeckSnapshot.empty(deck: .b)
     private(set) var mixerSnapshot = MixerSnapshot.initial
     var statusMessage: String? { didSet { needsDisplay = true } }
+    private var cursorStatusMessage: String?
 
-    // BPM tap state — purely local, no audio-side dependency.
-    private var bpmTapA = BPMTapState()
-    private var bpmTapB = BPMTapState()
-    private var bpmA: Double { bpmTapA.bpm }
-    private var bpmB: Double { bpmTapB.bpm }
-    private var beatOffsetA: Double { bpmTapA.beatOffset }
-    private var beatOffsetB: Double { bpmTapB.beatOffset }
+    private var jogDeck: DeckID?
+    private var jogMode: JogMode?
+    private var jogValue: Double = 0
 
-    // Scratch state — tracked locally for visual feedback.
-    private var scratchRateA: Double = 0
-    private var scratchRateB: Double = 0
-    private var isScratchActiveA: Bool = false
-    private var isScratchActiveB: Bool = false
-
-    // MARK: - Init
+    var activeDeck: DeckID { keyboardStateMachine.activeDeck }
+    var isCursorLocked: Bool { cursorLockController.isLocked }
 
     override init(frame frameRect: NSRect) {
         super.init(frame: frameRect)
-        allowedTouchTypes = [.indirect]
-        wantsRestingTouches = false
+        configureTouchInput()
     }
 
     required init?(coder: NSCoder) {
         super.init(coder: coder)
-        allowedTouchTypes = [.indirect]
-        wantsRestingTouches = false
+        configureTouchInput()
     }
 
     override var acceptsFirstResponder: Bool { true }
+
+    private func configureTouchInput() {
+        allowedTouchTypes = [.indirect]
+        wantsRestingTouches = false
+    }
 
     func apply(
         deckA: DeckSnapshot,
@@ -69,16 +61,17 @@ final class TouchLabView: NSView {
         needsDisplay = true
     }
 
+    func resetTransientState(for deck: DeckID) {
+        guard jogDeck == deck else { return }
+        jogDeck = nil
+        jogMode = nil
+        jogValue = 0
+        needsDisplay = true
+    }
+
     override func viewDidMoveToWindow() {
         super.viewDidMoveToWindow()
-
-        if let observedWindow {
-            NotificationCenter.default.removeObserver(
-                self,
-                name: NSWindow.didResignKeyNotification,
-                object: observedWindow
-            )
-        }
+        stopObservingWindow()
 
         observedWindow = window
         if let window {
@@ -91,14 +84,21 @@ final class TouchLabView: NSView {
                 name: NSWindow.didResignKeyNotification,
                 object: window
             )
+            NotificationCenter.default.addObserver(
+                self,
+                selector: #selector(windowWillClose(_:)),
+                name: NSWindow.willCloseNotification,
+                object: window
+            )
         } else {
             inputTimer?.invalidate()
             inputTimer = nil
+            cancelActiveInput()
         }
     }
 
     override func resignFirstResponder() -> Bool {
-        keyboardStateMachine.focusLost()
+        cancelActiveInput()
         return super.resignFirstResponder()
     }
 
@@ -106,14 +106,37 @@ final class TouchLabView: NSView {
         cancelActiveInput()
     }
 
+    @objc private func windowWillClose(_ notification: Notification) {
+        cancelActiveInput()
+    }
+
+    func shutdown() {
+        inputTimer?.invalidate()
+        inputTimer = nil
+        stopObservingWindow()
+        cancelActiveInput()
+    }
+
+    private func stopObservingWindow() {
+        guard let observedWindow else { return }
+        NotificationCenter.default.removeObserver(
+            self,
+            name: NSWindow.didResignKeyNotification,
+            object: observedWindow
+        )
+        NotificationCenter.default.removeObserver(
+            self,
+            name: NSWindow.willCloseNotification,
+            object: observedWindow
+        )
+    }
+
     // MARK: - Keyboard Events
 
     override func keyDown(with event: NSEvent) {
         let shift = event.modifierFlags.contains(.shift)
         let systemModifiers: NSEvent.ModifierFlags = [.command, .control, .option]
-        let hasSystemModifier = !event.modifierFlags
-            .intersection(systemModifiers)
-            .isEmpty
+        let hasSystemModifier = !event.modifierFlags.intersection(systemModifiers).isEmpty
         guard KeyboardMapping.handles(
             event.keyCode,
             shift: shift,
@@ -122,6 +145,7 @@ final class TouchLabView: NSView {
             super.keyDown(with: event)
             return
         }
+
         emit(keyboardStateMachine.keyDown(
             keyCode: event.keyCode,
             isRepeat: event.isARepeat,
@@ -130,42 +154,15 @@ final class TouchLabView: NSView {
     }
 
     override func keyUp(with event: NSEvent) {
-        if KeyboardMapping.isHeldKey(event.keyCode)
-            || KeyboardMapping.oneShotAction(
-                for: event.keyCode,
+        if keyboardStateMachine.pressedKeys.contains(event.keyCode)
+            || KeyboardMapping.handles(
+                event.keyCode,
                 shift: event.modifierFlags.contains(.shift)
-            ) != nil {
+            ) {
             keyboardStateMachine.keyUp(keyCode: event.keyCode)
         } else {
             super.keyUp(with: event)
         }
-    }
-
-    // MARK: - BPM Tap
-
-    private func handleBpmTap(deck: DeckID) {
-        let now = CACurrentMediaTime()
-        switch deck {
-        case .a:
-            bpmTapA.tap(at: now, progress: deckASnapshot.extendedProgress)
-        case .b:
-            bpmTapB.tap(at: now, progress: deckBSnapshot.extendedProgress)
-        }
-        needsDisplay = true
-    }
-
-    func resetTransientState(for deck: DeckID) {
-        switch deck {
-        case .a:
-            bpmTapA.reset()
-            scratchRateA = 0
-            isScratchActiveA = false
-        case .b:
-            bpmTapB.reset()
-            scratchRateB = 0
-            isScratchActiveB = false
-        }
-        needsDisplay = true
     }
 
     // MARK: - Input Timer
@@ -191,7 +188,10 @@ final class TouchLabView: NSView {
         let points = sortedTouches(event.touches(matching: .began, in: self)).compactMap {
             touchPoint(for: $0, timestamp: event.timestamp, createIdentity: true)
         }
-        emit(gestureStateMachine.process(.began(points)))
+        let mode: JogMode = event.modifierFlags.contains(.shift) ? .pitchBend : .scratch
+        emit(gestureStateMachine.process(
+            .began(points, deck: keyboardStateMachine.activeDeck, mode: mode)
+        ))
         syncSession()
     }
 
@@ -266,490 +266,504 @@ final class TouchLabView: NSView {
         emit(gestureStateMachine.process(.cancelled))
         touchIDs.removeAll(keepingCapacity: true)
         syncSession()
+        restoreCursor()
+    }
+
+    private func cancelJogAndUnlock() {
+        emit(gestureStateMachine.process(.cancelled))
+        touchIDs.removeAll(keepingCapacity: true)
+        syncSession()
+        restoreCursor()
     }
 
     private func emit(_ actions: [DJAction]) {
         for action in actions {
             switch action {
-            case .setScratch(.a, let rate):
-                isScratchActiveA = true
-                scratchRateA = rate
-            case .setScratch(.b, let rate):
-                isScratchActiveB = true
-                scratchRateB = rate
-            case .endScratch(.a):
-                isScratchActiveA = false
-                scratchRateA = 0
-            case .endScratch(.b):
-                isScratchActiveB = false
-                scratchRateB = 0
-            case .tapBPM(let deck):
-                handleBpmTap(deck: deck)
-            case .load, .togglePlay, .cue, .nudge, .adjustFilter, .adjustVolume,
-                 .adjustTempo, .resetTempo, .adjustCrossfader, .stepCrossfader,
-                 .toggleMonitor, .toggleOutputMode:
+            case .selectActiveDeck:
+                needsDisplay = true
+            case .setScratch(let deck, let rate):
+                jogDeck = deck
+                jogMode = .scratch
+                jogValue = rate
+                needsDisplay = true
+            case .endScratch:
+                jogDeck = nil
+                jogMode = nil
+                jogValue = 0
+                needsDisplay = true
+            case .setPitchBend(let deck, let percent):
+                jogDeck = deck
+                jogMode = .pitchBend
+                jogValue = percent
+                needsDisplay = true
+            case .endPitchBend:
+                jogDeck = nil
+                jogMode = nil
+                jogValue = 0
+                needsDisplay = true
+            case .toggleCursorLock:
+                toggleCursorLock()
+            case .cancelJogAndUnlock:
+                cancelJogAndUnlock()
+            case .load:
+                restoreCursor()
+            case .adjustCrossfader, .stepCrossfader, .togglePlay, .cue, .nudge,
+                 .adjustFilter, .adjustVolume, .adjustTempo, .resetTempo,
+                 .toggleMonitor, .toggleOutputMode, .tapBPM,
+                 .restoreAutomaticBPM, .syncTempo:
                 break
             }
             onAction?(action)
         }
     }
 
+    // MARK: - Cursor Lock
+
+    private func toggleCursorLock() {
+        if cursorLockController.isLocked {
+            restoreCursor()
+            return
+        }
+
+        do {
+            try cursorLockController.lock(
+                windowIsKey: window?.isKeyWindow == true,
+                cursorInsideContent: isCursorInsideContent()
+            )
+            cursorStatusMessage = nil
+        } catch {
+            cursorStatusMessage = error.localizedDescription
+        }
+        needsDisplay = true
+    }
+
+    private func restoreCursor() {
+        do {
+            try cursorLockController.unlock()
+            cursorStatusMessage = nil
+        } catch {
+            cursorStatusMessage = error.localizedDescription
+        }
+        needsDisplay = true
+    }
+
+    private func isCursorInsideContent() -> Bool {
+        guard let window, let contentView = window.contentView else { return false }
+        let pointInWindow = window.convertPoint(fromScreen: NSEvent.mouseLocation)
+        let pointInContent = contentView.convert(pointInWindow, from: nil)
+        return contentView.bounds.contains(pointInContent)
+    }
+
     // MARK: - Drawing
 
     override func draw(_ dirtyRect: NSRect) {
         drawBackground()
-        drawZones()
+        drawDeckPanels()
         drawWaveforms()
         drawDeckHeaders()
-        drawFilterIndicators()
-        drawFaders()
+        drawLevelIndicators()
         drawCrossfaderIndicator()
         drawTouches()
         drawHUD()
     }
 
-    // MARK: - Drawing Helpers
-
     private func drawBackground() {
-        NSColor(white: 0.08, alpha: 1.0).setFill()
+        NSColor(white: 0.08, alpha: 1).setFill()
         bounds.fill()
     }
 
-    private func drawZones() {
-        for zone in ZoneLayout.all {
-            let rect = viewRect(from: zone.rect)
-            let color = zoneColor(for: zone.name)
-
-            color.withAlphaComponent(0.12).setFill()
-            NSBezierPath(rect: rect).fill()
-
-            color.withAlphaComponent(0.45).setStroke()
-            let border = NSBezierPath(rect: rect)
-            border.lineWidth = 1.0
-            border.stroke()
-
-            if zone.name == .deckA || zone.name == .deckB {
-                drawLabel(zone.name.rawValue, in: rect, color: color)
-            }
-        }
+    private func deckRect(for deck: DeckID) -> NSRect {
+        let margin: CGFloat = 16
+        let gap: CGFloat = 10
+        let bottom: CGFloat = 58
+        let top: CGFloat = 52
+        let availableWidth = bounds.width - margin * 2 - gap
+        let width = availableWidth / 2
+        let x = deck == .a ? margin : margin + width + gap
+        return NSRect(
+            x: x,
+            y: bottom,
+            width: width,
+            height: max(0, bounds.height - bottom - top)
+        )
     }
 
-    private func drawLabel(_ text: String, in rect: NSRect, color: NSColor) {
-        let attrs: [NSAttributedString.Key: Any] = [
-            .foregroundColor: color.withAlphaComponent(0.7),
-            .font: NSFont.monospacedSystemFont(ofSize: 13, weight: .medium),
-        ]
-        let str = NSAttributedString(string: text, attributes: attrs)
-        let size = str.size()
-        let point = NSPoint(x: rect.midX - size.width / 2, y: rect.midY - size.height / 2)
-        str.draw(at: point)
+    private func drawDeckPanels() {
+        for deck in [DeckID.a, .b] {
+            let rect = deckRect(for: deck)
+            let color = deckColor(for: deck)
+            color.withAlphaComponent(activeDeck == deck ? 0.13 : 0.07).setFill()
+            NSBezierPath(roundedRect: rect, xRadius: 8, yRadius: 8).fill()
+
+            color.withAlphaComponent(activeDeck == deck ? 0.95 : 0.28).setStroke()
+            let border = NSBezierPath(roundedRect: rect, xRadius: 8, yRadius: 8)
+            border.lineWidth = activeDeck == deck ? 3 : 1
+            border.stroke()
+        }
     }
 
     private func drawWaveforms() {
-        if let zone = ZoneLayout.all.first(where: { $0.name == .deckA }) {
-            drawWaveform(deckASnapshot.waveformSamples,
-                         progress: deckASnapshot.extendedProgress,
-                         bpm: bpmA, beatOffset: beatOffsetA,
-                         duration: deckASnapshot.duration,
-                         scratchRate: scratchRateA, isScratchActive: isScratchActiveA,
-                         in: viewRect(from: zone.rect), color: zoneColor(for: .deckA))
-        }
-        if let zone = ZoneLayout.all.first(where: { $0.name == .deckB }) {
-            drawWaveform(deckBSnapshot.waveformSamples,
-                         progress: deckBSnapshot.extendedProgress,
-                         bpm: bpmB, beatOffset: beatOffsetB,
-                         duration: deckBSnapshot.duration,
-                         scratchRate: scratchRateB, isScratchActive: isScratchActiveB,
-                         in: viewRect(from: zone.rect), color: zoneColor(for: .deckB))
-        }
+        drawWaveform(snapshot: deckASnapshot, in: deckRect(for: .a), color: deckColor(for: .a))
+        drawWaveform(snapshot: deckBSnapshot, in: deckRect(for: .b), color: deckColor(for: .b))
     }
 
-    /// Scrolling waveform: playhead fixed at center, waveform scrolls with playback.
-    private func drawWaveform(_ samples: [Float], progress: Double,
-                               bpm: Double, beatOffset: Double, duration: Double,
-                               scratchRate: Double, isScratchActive: Bool,
-                               in rect: NSRect, color: NSColor) {
+    private func drawWaveform(snapshot: DeckSnapshot, in rect: NSRect, color: NSColor) {
+        let samples = snapshot.waveformSamples
         guard samples.count > 1 else { return }
 
-        // Leave room for deck header (top 22px) and filter bar (right 15px).
-        let waveRect = NSRect(x: rect.minX, y: rect.minY,
-                              width: rect.width - 15, height: rect.height - 22)
-        let mid = waveRect.midY
-        let halfH = waveRect.height * 0.38
-
-        // Subtle background highlight when scratch is active.
-        if isScratchActive {
-            color.withAlphaComponent(0.07).setFill()
+        let waveRect = NSRect(
+            x: rect.minX + 12,
+            y: rect.minY + 20,
+            width: rect.width - 24,
+            height: rect.height - 52
+        )
+        let mode = jogDeck == snapshot.deck ? jogMode : nil
+        if mode != nil {
+            color.withAlphaComponent(0.08).setFill()
             NSBezierPath(rect: waveRect).fill()
         }
 
-        let visibleHalf = 150          // samples visible on each side of center
+        let visibleHalf = 150
         let total = visibleHalf * 2
-        let center = Int(progress * Double(samples.count))
+        let center = Int(snapshot.extendedProgress * Double(samples.count))
+        let mid = waveRect.midY
+        let halfHeight = waveRect.height * 0.38
 
-        func amp(at idx: Int) -> CGFloat {
-            guard idx >= 0 && idx < samples.count else { return 0 }
-            return CGFloat(samples[idx])
+        func amplitude(at index: Int) -> CGFloat {
+            guard samples.indices.contains(index) else { return 0 }
+            return CGFloat(samples[index])
         }
-        func xFor(offset: Int) -> CGFloat {
+
+        func xPosition(for offset: Int) -> CGFloat {
             waveRect.minX + CGFloat(offset) / CGFloat(total) * waveRect.width
         }
 
-        // Played region (left half — brighter).
-        let playedPath = NSBezierPath()
-        for off in 0...visibleHalf {
-            let x = xFor(offset: off)
-            let y = mid + amp(at: center - visibleHalf + off) * halfH
-            if off == 0 { playedPath.move(to: NSPoint(x: x, y: y)) }
-            else         { playedPath.line(to: NSPoint(x: x, y: y)) }
+        let played = NSBezierPath()
+        for offset in 0...visibleHalf {
+            let point = NSPoint(
+                x: xPosition(for: offset),
+                y: mid + amplitude(at: center - visibleHalf + offset) * halfHeight
+            )
+            offset == 0 ? played.move(to: point) : played.line(to: point)
         }
-        for off in stride(from: visibleHalf, through: 0, by: -1) {
-            let x = xFor(offset: off)
-            playedPath.line(to: NSPoint(x: x, y: mid - amp(at: center - visibleHalf + off) * halfH))
+        for offset in stride(from: visibleHalf, through: 0, by: -1) {
+            played.line(to: NSPoint(
+                x: xPosition(for: offset),
+                y: mid - amplitude(at: center - visibleHalf + offset) * halfHeight
+            ))
         }
-        playedPath.close()
-        color.withAlphaComponent(0.60).setFill()
-        playedPath.fill()
+        played.close()
+        color.withAlphaComponent(0.6).setFill()
+        played.fill()
 
-        // Upcoming region (right half — dimmer).
-        let upcomingPath = NSBezierPath()
-        for off in visibleHalf...total {
-            let x = xFor(offset: off)
-            let y = mid + amp(at: center - visibleHalf + off) * halfH
-            if off == visibleHalf { upcomingPath.move(to: NSPoint(x: x, y: y)) }
-            else                  { upcomingPath.line(to: NSPoint(x: x, y: y)) }
+        let upcoming = NSBezierPath()
+        for offset in visibleHalf...total {
+            let point = NSPoint(
+                x: xPosition(for: offset),
+                y: mid + amplitude(at: center - visibleHalf + offset) * halfHeight
+            )
+            offset == visibleHalf ? upcoming.move(to: point) : upcoming.line(to: point)
         }
-        for off in stride(from: total, through: visibleHalf, by: -1) {
-            let x = xFor(offset: off)
-            upcomingPath.line(to: NSPoint(x: x, y: mid - amp(at: center - visibleHalf + off) * halfH))
+        for offset in stride(from: total, through: visibleHalf, by: -1) {
+            upcoming.line(to: NSPoint(
+                x: xPosition(for: offset),
+                y: mid - amplitude(at: center - visibleHalf + offset) * halfHeight
+            ))
         }
-        upcomingPath.close()
+        upcoming.close()
         color.withAlphaComponent(0.25).setFill()
-        upcomingPath.fill()
+        upcoming.fill()
 
-        // Center playhead — yellow when scratching, white when playing normally.
-        let headColor: NSColor = isScratchActive ? .systemYellow : .white
-        let headPath = NSBezierPath()
-        headPath.move(to: NSPoint(x: waveRect.midX, y: waveRect.minY + 4))
-        headPath.line(to: NSPoint(x: waveRect.midX, y: waveRect.maxY - 4))
-        headPath.lineWidth = isScratchActive ? 2.0 : 1.5
-        headColor.withAlphaComponent(0.9).setStroke()
-        headPath.stroke()
+        drawBeatGrid(snapshot: snapshot, center: center, visibleHalf: visibleHalf,
+                     samplesCount: samples.count, in: waveRect)
 
-        // Scratch rate arrow below playhead.
-        if isScratchActive && abs(scratchRate) > 0.05 {
-            drawScratchArrow(rate: scratchRate,
-                             at: NSPoint(x: waveRect.midX, y: waveRect.minY + 10),
-                             color: color)
+        let playhead = NSBezierPath()
+        playhead.move(to: NSPoint(x: waveRect.midX, y: waveRect.minY + 4))
+        playhead.line(to: NSPoint(x: waveRect.midX, y: waveRect.maxY - 4))
+        playhead.lineWidth = mode == nil ? 1.5 : 2
+        (mode == nil ? NSColor.white : NSColor.systemYellow).setStroke()
+        playhead.stroke()
+
+        if mode != nil, abs(jogValue) > 0.05 {
+            drawJogArrow(
+                value: jogValue,
+                at: NSPoint(x: waveRect.midX, y: waveRect.minY + 10),
+                color: color
+            )
         }
-
-        // Beat grid: white tick marks at BPM intervals.
-        if bpm > 0 && duration > 0 {
-            let beatIntervalSamples = 60.0 * Double(samples.count) / (bpm * duration)
-            let beatOffsetSample = beatOffset * Double(samples.count)
-            let firstN = Int(floor((Double(center - visibleHalf) - beatOffsetSample) / beatIntervalSamples))
-            var beatPos = beatOffsetSample + Double(firstN) * beatIntervalSamples
-            while beatPos <= Double(center + visibleHalf) {
-                let offset = Int(beatPos.rounded()) - center
-                if offset >= -visibleHalf && offset <= visibleHalf {
-                    let x = xFor(offset: offset + visibleHalf)
-                    let tick = NSBezierPath()
-                    tick.move(to: NSPoint(x: x, y: waveRect.minY + 2))
-                    tick.line(to: NSPoint(x: x, y: waveRect.minY + 10))
-                    tick.lineWidth = 1.0
-                    NSColor.white.withAlphaComponent(0.45).setStroke()
-                    tick.stroke()
-                }
-                beatPos += beatIntervalSamples
-            }
-            let bpmStr = String(format: "%.1f BPM", bpm) as NSString
-            bpmStr.draw(at: NSPoint(x: waveRect.minX + 4, y: waveRect.minY + 4),
-                        withAttributes: [.foregroundColor: NSColor.white.withAlphaComponent(0.65),
-                                         .font: NSFont.systemFont(ofSize: 10)])
-        }
-
     }
 
-    private func drawScratchArrow(rate: Double, at center: NSPoint, color: NSColor) {
-        let size = min(14, CGFloat(abs(rate)) * 5)
-        let dir: CGFloat = rate > 0 ? 1 : -1
+    private func drawBeatGrid(
+        snapshot: DeckSnapshot,
+        center: Int,
+        visibleHalf: Int,
+        samplesCount: Int,
+        in rect: NSRect
+    ) {
+        guard let bpm = snapshot.bpm,
+              let firstBeatTime = snapshot.firstBeatTime,
+              bpm > 0,
+              snapshot.duration > 0 else { return }
+
+        let beatInterval = 60 * Double(samplesCount) / (bpm * snapshot.duration)
+        let firstBeatSample = firstBeatTime / snapshot.duration * Double(samplesCount)
+        let firstVisibleBeat = Int(floor((Double(center - visibleHalf) - firstBeatSample) / beatInterval))
+        var beat = firstBeatSample + Double(firstVisibleBeat) * beatInterval
+        while beat <= Double(center + visibleHalf) {
+            let offset = Int(beat.rounded()) - center
+            if (-visibleHalf...visibleHalf).contains(offset) {
+                let x = rect.minX
+                    + CGFloat(offset + visibleHalf) / CGFloat(visibleHalf * 2) * rect.width
+                let tick = NSBezierPath()
+                tick.move(to: NSPoint(x: x, y: rect.minY + 2))
+                tick.line(to: NSPoint(x: x, y: rect.minY + 10))
+                tick.lineWidth = 1
+                NSColor.white.withAlphaComponent(0.4).setStroke()
+                tick.stroke()
+            }
+            beat += beatInterval
+        }
+    }
+
+    private func drawJogArrow(value: Double, at center: NSPoint, color: NSColor) {
+        let size = min(14, CGFloat(abs(value)) * 2)
+        let direction: CGFloat = value > 0 ? 1 : -1
         let arrow = NSBezierPath()
-        arrow.move(to: NSPoint(x: center.x + dir * size, y: center.y))
-        arrow.line(to: NSPoint(x: center.x - dir * size * 0.5, y: center.y + size * 0.5))
-        arrow.line(to: NSPoint(x: center.x - dir * size * 0.5, y: center.y - size * 0.5))
+        arrow.move(to: NSPoint(x: center.x + direction * size, y: center.y))
+        arrow.line(to: NSPoint(x: center.x - direction * size * 0.5, y: center.y + size * 0.5))
+        arrow.line(to: NSPoint(x: center.x - direction * size * 0.5, y: center.y - size * 0.5))
         arrow.close()
         color.withAlphaComponent(0.85).setFill()
         arrow.fill()
     }
 
-    private func drawTouches() {
-        for (_, touch) in session.activeTouches {
-            let center = viewPoint(from: touch.position)
-            let zone = ZoneLayout.zone(for: touch.position)
-            let color: NSColor = zone.map { zoneColor(for: $0.name) } ?? .white
-            drawCircle(center: center, radius: 26, fill: color.withAlphaComponent(0.2), stroke: nil)
-            drawCircle(center: center, radius: 6, fill: color, stroke: nil)
-        }
+    private func drawDeckHeaders() {
+        drawDeckHeader(snapshot: deckASnapshot, in: deckRect(for: .a), color: deckColor(for: .a))
+        drawDeckHeader(snapshot: deckBSnapshot, in: deckRect(for: .b), color: deckColor(for: .b))
     }
 
-    private func drawCircle(center: NSPoint, radius: CGFloat, fill: NSColor?, stroke: NSColor?) {
-        let rect = NSRect(x: center.x - radius, y: center.y - radius,
-                          width: radius * 2, height: radius * 2)
-        let path = NSBezierPath(ovalIn: rect)
-        if let fill { fill.setFill(); path.fill() }
-        if let stroke { stroke.setStroke(); path.stroke() }
-    }
-
-    private func drawHUD() {
-        let hints = [
-            "Q/W:load  A/S:play  Z/X:cue  E·D/R·F:vol  T·G/Y·H:filter  ↑·↓/I·K:nudge  ←/→:xfade",
-            "U·J/O·L:tempo  5/6:tempo reset  B/N:tap BPM  C/V:MON  M:split cue",
-        ]
-        let hintAttrs: [NSAttributedString.Key: Any] = [
-            .foregroundColor: NSColor.white.withAlphaComponent(0.2),
-            .font: NSFont.monospacedSystemFont(ofSize: 8, weight: .regular),
-        ]
-        for (index, hint) in hints.enumerated() {
-            let hintString = NSAttributedString(string: hint, attributes: hintAttrs)
-            hintString.draw(at: NSPoint(
-                x: (bounds.width - hintString.size().width) / 2,
-                y: 6 + CGFloat(index) * 11
-            ))
-        }
-
-        if let statusMessage {
-            let statusAttrs: [NSAttributedString.Key: Any] = [
-                .foregroundColor: NSColor.white.withAlphaComponent(0.75),
+    private func drawDeckHeader(snapshot: DeckSnapshot, in rect: NSRect, color: NSColor) {
+        let bend = abs(snapshot.pitchBendPercent) > 0.005
+            ? String(format: "  BEND %+.2f%%", snapshot.pitchBendPercent)
+            : ""
+        let monitor = snapshot.monitorEnabled ? "  MON" : ""
+        let title = "\(snapshot.deck.displayName): \(snapshot.trackName ?? "—")  \(snapshot.isPlaying ? "▶" : "■")  \(String(format: "%+.2f%%", snapshot.tempoPercent))\(bend)\(monitor)"
+        NSAttributedString(
+            string: title,
+            attributes: [
+                .foregroundColor: color.withAlphaComponent(0.95),
                 .font: NSFont.monospacedSystemFont(ofSize: 11, weight: .medium),
             ]
-            let status = NSAttributedString(string: statusMessage, attributes: statusAttrs)
-            status.draw(at: NSPoint(
-                x: (bounds.width - status.size().width) / 2,
-                y: bounds.height - 38
-            ))
-        }
+        ).draw(at: NSPoint(x: rect.minX + 10, y: rect.maxY - 20))
 
-        let outputWarning: String?
-        let outputColor: NSColor
-        if let routingError = mixerSnapshot.routingErrorMessage {
-            outputWarning = "AUDIO STOPPED — \(routingError)"
-            outputColor = .systemRed
-        } else if mixerSnapshot.outputMode == .splitCue {
-            outputWarning = "SPLIT CUE — L: MASTER / R: CUE"
-            outputColor = .systemYellow
-        } else {
-            outputWarning = nil
-            outputColor = .clear
-        }
-
-        if let outputWarning {
-            let warning = NSAttributedString(
-                string: outputWarning,
+        if let bpm = snapshot.bpm {
+            let source = snapshot.beatGridSource == .tap ? "TAP" : "AUTO"
+            let confidence = Int(((snapshot.beatConfidence ?? 0) * 100).rounded())
+            let bpmText = String(format: "%.1f BPM  %@ %d%%", bpm, source, confidence)
+            NSAttributedString(
+                string: bpmText,
                 attributes: [
-                    .foregroundColor: outputColor.withAlphaComponent(0.95),
-                    .font: NSFont.monospacedSystemFont(ofSize: 12, weight: .bold),
+                    .foregroundColor: NSColor.white.withAlphaComponent(0.58),
+                    .font: NSFont.monospacedSystemFont(ofSize: 9, weight: .regular),
                 ]
+            ).draw(at: NSPoint(x: rect.minX + 10, y: rect.maxY - 34))
+        }
+
+        guard snapshot.duration > 0 else { return }
+        let remaining = snapshot.duration * (1 - snapshot.playbackProgress)
+        let time = "-\(formatTime(remaining)) / \(formatTime(snapshot.duration))"
+        let attributed = NSAttributedString(
+            string: time,
+            attributes: [
+                .foregroundColor: color.withAlphaComponent(0.58),
+                .font: NSFont.monospacedSystemFont(ofSize: 9, weight: .regular),
+            ]
+        )
+        attributed.draw(at: NSPoint(x: rect.maxX - attributed.size().width - 10, y: rect.maxY - 34))
+    }
+
+    private func drawLevelIndicators() {
+        for (snapshot, deck) in [(deckASnapshot, DeckID.a), (deckBSnapshot, .b)] {
+            let rect = deckRect(for: deck)
+            drawLevelBar(
+                level: snapshot.faderLevel,
+                label: "VOL",
+                x: rect.minX + 5,
+                in: rect,
+                color: deckColor(for: deck)
             )
-            warning.draw(at: NSPoint(
-                x: (bounds.width - warning.size().width) / 2,
-                y: bounds.height - 21
-            ))
+            drawLevelBar(
+                level: snapshot.filterLevel,
+                label: "FLT",
+                x: rect.maxX - 9,
+                in: rect,
+                color: deckColor(for: deck)
+            )
         }
     }
 
-    private func drawFaders() {
-        guard let strip = ZoneLayout.all.first(where: { $0.name == .topStrip }) else { return }
-        let rect = viewRect(from: strip.rect)
-        let midX = rect.midX
-
-        // Deck A fader — left half
-        let aRect = NSRect(x: rect.minX + 4, y: rect.minY + 4,
-                           width: rect.width / 2 - 8, height: rect.height - 8)
-        drawFaderBar(in: aRect, level: CGFloat(deckASnapshot.faderLevel),
-                     color: zoneColor(for: .deckA), label: "VOL A")
-
-        // Deck B fader — right half
-        let bRect = NSRect(x: midX + 4, y: rect.minY + 4,
-                           width: rect.width / 2 - 8, height: rect.height - 8)
-        drawFaderBar(in: bRect, level: CGFloat(deckBSnapshot.faderLevel),
-                     color: zoneColor(for: .deckB), label: "VOL B")
-    }
-
-    private func drawFaderBar(in rect: NSRect, level: CGFloat, color: NSColor, label: String) {
-        // Track background
-        color.withAlphaComponent(0.1).setFill()
-        NSBezierPath(rect: rect).fill()
-
-        // Filled level bar
-        let fillH = rect.height * level
-        let fillRect = NSRect(x: rect.minX, y: rect.minY, width: rect.width, height: fillH)
-        color.withAlphaComponent(0.5).setFill()
-        NSBezierPath(rect: fillRect).fill()
-
-        // Label + value
-        let text = String(format: "%@ %.0f%%", label, level * 100)
-        let attrs: [NSAttributedString.Key: Any] = [
-            .foregroundColor: color.withAlphaComponent(0.8),
-            .font: NSFont.monospacedSystemFont(ofSize: 9, weight: .regular),
-        ]
-        let str = NSAttributedString(string: text, attributes: attrs)
-        let pt = NSPoint(x: rect.minX + 3, y: rect.midY - str.size().height / 2)
-        str.draw(at: pt)
+    private func drawLevelBar(
+        level: Float,
+        label: String,
+        x: CGFloat,
+        in rect: NSRect,
+        color: NSColor
+    ) {
+        let bar = NSRect(x: x, y: rect.minY + 8, width: 4, height: rect.height - 50)
+        color.withAlphaComponent(0.12).setFill()
+        NSBezierPath(rect: bar).fill()
+        let fill = NSRect(
+            x: bar.minX,
+            y: bar.minY,
+            width: bar.width,
+            height: bar.height * CGFloat(level)
+        )
+        color.withAlphaComponent(0.65).setFill()
+        NSBezierPath(rect: fill).fill()
+        (label as NSString).draw(
+            at: NSPoint(x: x - 2, y: rect.minY + 2),
+            withAttributes: [
+                .foregroundColor: color.withAlphaComponent(0.5),
+                .font: NSFont.monospacedSystemFont(ofSize: 6, weight: .regular),
+            ]
+        )
     }
 
     private func drawCrossfaderIndicator() {
-        guard let stripZone = ZoneLayout.all.first(where: { $0.name == .bottomStrip }) else { return }
-        let stripRect = viewRect(from: stripZone.rect)
-        let color = zoneColor(for: .bottomStrip)
-
-        // A / A+B / B mode labels — highlight active mode
-        let modeLabels = ["A", "A+B", "B"]
-        let crossfaderMode = crossfaderModeValues.enumerated().min {
+        let rect = NSRect(x: bounds.midX - 90, y: 31, width: 180, height: 16)
+        let labels = ["A", "A+B", "B"]
+        let activeMode = crossfaderModeValues.enumerated().min {
             abs($0.element - mixerSnapshot.crossfaderValue)
                 < abs($1.element - mixerSnapshot.crossfaderValue)
         }?.offset ?? 1
-        let segW = stripRect.width / 3
-        for (i, label) in modeLabels.enumerated() {
-            let segRect = NSRect(x: stripRect.minX + CGFloat(i) * segW,
-                                 y: stripRect.minY, width: segW, height: stripRect.height)
-            let isActive = i == crossfaderMode
-            if isActive {
-                color.withAlphaComponent(0.25).setFill()
-                NSBezierPath(rect: segRect).fill()
+        for index in labels.indices {
+            let segment = NSRect(
+                x: rect.minX + CGFloat(index) * rect.width / 3,
+                y: rect.minY,
+                width: rect.width / 3,
+                height: rect.height
+            )
+            let active = index == activeMode
+            if active {
+                NSColor.systemPurple.withAlphaComponent(0.25).setFill()
+                NSBezierPath(roundedRect: segment, xRadius: 3, yRadius: 3).fill()
             }
-            let alpha: CGFloat = isActive ? 0.95 : 0.35
-            let attrs: [NSAttributedString.Key: Any] = [
-                .foregroundColor: color.withAlphaComponent(alpha),
-                .font: NSFont.monospacedSystemFont(ofSize: isActive ? 12 : 10,
-                                                    weight: isActive ? .bold : .regular),
+            let text = NSAttributedString(
+                string: labels[index],
+                attributes: [
+                    .foregroundColor: NSColor.systemPurple.withAlphaComponent(active ? 0.95 : 0.35),
+                    .font: NSFont.monospacedSystemFont(ofSize: 9, weight: active ? .bold : .regular),
+                ]
+            )
+            text.draw(at: NSPoint(
+                x: segment.midX - text.size().width / 2,
+                y: segment.midY - text.size().height / 2
+            ))
+        }
+    }
+
+    private func drawTouches() {
+        let color = deckColor(for: jogDeck ?? activeDeck)
+        for touch in session.activeTouches.values {
+            let center = NSPoint(
+                x: touch.position.x * bounds.width,
+                y: touch.position.y * bounds.height
+            )
+            drawCircle(center: center, radius: 26, fill: color.withAlphaComponent(0.2))
+            drawCircle(center: center, radius: 6, fill: color)
+        }
+    }
+
+    private func drawCircle(center: NSPoint, radius: CGFloat, fill: NSColor) {
+        fill.setFill()
+        NSBezierPath(ovalIn: NSRect(
+            x: center.x - radius,
+            y: center.y - radius,
+            width: radius * 2,
+            height: radius * 2
+        )).fill()
+    }
+
+    private func drawHUD() {
+        let displayedJogDeck = jogDeck ?? activeDeck
+        let mode = jogMode == .pitchBend ? "BEND" : "SCRATCH"
+        var jogStatus = "JOG \(displayedJogDeck.displayName) · \(mode)"
+        if jogDeck != nil, displayedJogDeck != activeDeck {
+            jogStatus += " · NEXT \(activeDeck.displayName)"
+        }
+        if isCursorLocked {
+            jogStatus += " · CURSOR LOCKED"
+        }
+        NSAttributedString(
+            string: jogStatus,
+            attributes: [
+                .foregroundColor: deckColor(for: activeDeck),
+                .font: NSFont.monospacedSystemFont(ofSize: 13, weight: .bold),
             ]
-            let str = NSAttributedString(string: label, attributes: attrs)
-            let pt = NSPoint(x: segRect.midX - str.size().width / 2,
-                             y: segRect.midY - str.size().height / 2)
-            str.draw(at: pt)
-        }
+        ).draw(at: NSPoint(x: 16, y: bounds.height - 27))
 
-        // Playhead line at exact crossfader position
-        let xPos = stripRect.minX + CGFloat(mixerSnapshot.crossfaderValue) * stripRect.width
-        let line = NSBezierPath()
-        line.move(to: NSPoint(x: xPos, y: stripRect.minY + 2))
-        line.line(to: NSPoint(x: xPos, y: stripRect.maxY - 2))
-        line.lineWidth = 2.0
-        NSColor.white.withAlphaComponent(0.7).setStroke()
-        line.stroke()
-    }
-
-    // MARK: - Deck Headers
-
-    private func drawDeckHeaders() {
-        if let zone = ZoneLayout.all.first(where: { $0.name == .deckA }) {
-            drawDeckHeader(snapshot: deckASnapshot,
-                           in: viewRect(from: zone.rect), color: zoneColor(for: .deckA))
-        }
-        if let zone = ZoneLayout.all.first(where: { $0.name == .deckB }) {
-            drawDeckHeader(snapshot: deckBSnapshot,
-                           in: viewRect(from: zone.rect), color: zoneColor(for: .deckB))
-        }
-    }
-
-    private func drawDeckHeader(snapshot: DeckSnapshot,
-                                 in rect: NSRect, color: NSColor) {
-        let headerH: CGFloat = 20
-        let headerRect = NSRect(x: rect.minX, y: rect.maxY - headerH,
-                                width: rect.width, height: headerH)
-
-        // Track name + play state (left side)
-        let nameAttrs: [NSAttributedString.Key: Any] = [
-            .foregroundColor: color.withAlphaComponent(0.9),
-            .font: NSFont.monospacedSystemFont(ofSize: 11, weight: .medium),
+        let hints = [
+            "Tab:deck  Q:load  Space:play  C:cue  S:sync  E/D:vol  R/F:filter  T/G:tempo  5:reset",
+            "B:tap  ⇧B:auto BPM  V:MON  ↑/↓:nudge  ←/→:xfade  M:split  P:cursor  Esc:release",
         ]
-        let tempo = String(format: "%+.2f%%", snapshot.tempoPercent)
-        let monitor = snapshot.monitorEnabled ? "  MON" : ""
-        let label = "\(snapshot.deck == .a ? "A" : "B"): \(snapshot.trackName ?? "—")  \(snapshot.isPlaying ? "▶" : "■")  \(tempo)\(monitor)"
-        NSAttributedString(string: label, attributes: nameAttrs)
-            .draw(at: NSPoint(x: headerRect.minX + 6, y: headerRect.minY + 3))
+        for (index, hint) in hints.enumerated() {
+            let text = NSAttributedString(
+                string: hint,
+                attributes: [
+                    .foregroundColor: NSColor.white.withAlphaComponent(0.25),
+                    .font: NSFont.monospacedSystemFont(ofSize: 8, weight: .regular),
+                ]
+            )
+            text.draw(at: NSPoint(
+                x: (bounds.width - text.size().width) / 2,
+                y: 5 + CGFloat(index) * 11
+            ))
+        }
 
-        // Time display (right side): elapsed / total
-        guard snapshot.duration > 0 else { return }
-        let elapsed = snapshot.playbackProgress * snapshot.duration
-        let remaining = snapshot.duration - elapsed
-        let timeStr = "-\(formatTime(remaining))  /  \(formatTime(snapshot.duration))"
-        let timeAttrs: [NSAttributedString.Key: Any] = [
-            .foregroundColor: color.withAlphaComponent(0.6),
-            .font: NSFont.monospacedSystemFont(ofSize: 10, weight: .regular),
-        ]
-        let timeStrAttr = NSAttributedString(string: timeStr, attributes: timeAttrs)
-        let timeX = headerRect.maxX - timeStrAttr.size().width - 6
-        timeStrAttr.draw(at: NSPoint(x: timeX, y: headerRect.minY + 4))
+        if let status = cursorStatusMessage ?? statusMessage {
+            let text = NSAttributedString(
+                string: status,
+                attributes: [
+                    .foregroundColor: NSColor.white.withAlphaComponent(0.78),
+                    .font: NSFont.monospacedSystemFont(ofSize: 10, weight: .medium),
+                ]
+            )
+            text.draw(at: NSPoint(
+                x: (bounds.width - text.size().width) / 2,
+                y: bounds.height - 43
+            ))
+        }
+
+        let warning: (String, NSColor)?
+        if let routingError = mixerSnapshot.routingErrorMessage {
+            warning = ("AUDIO STOPPED — \(routingError)", .systemRed)
+        } else if mixerSnapshot.outputMode == .splitCue {
+            warning = ("SPLIT CUE — L: MASTER / R: CUE", .systemYellow)
+        } else {
+            warning = nil
+        }
+        if let (message, color) = warning {
+            let text = NSAttributedString(
+                string: message,
+                attributes: [
+                    .foregroundColor: color.withAlphaComponent(0.95),
+                    .font: NSFont.monospacedSystemFont(ofSize: 11, weight: .bold),
+                ]
+            )
+            text.draw(at: NSPoint(x: bounds.maxX - text.size().width - 16, y: bounds.height - 26))
+        }
     }
 
     private func formatTime(_ seconds: Double) -> String {
         guard seconds.isFinite, seconds >= 0 else { return "--:--" }
-        let s = Int(seconds)
-        return String(format: "%d:%02d", s / 60, s % 60)
+        let value = Int(seconds)
+        return String(format: "%d:%02d", value / 60, value % 60)
     }
 
-    // MARK: - Filter Indicators
-
-    private func drawFilterIndicators() {
-        if let zone = ZoneLayout.all.first(where: { $0.name == .deckA }) {
-            drawFilterBar(level: deckASnapshot.filterLevel, in: viewRect(from: zone.rect),
-                          color: zoneColor(for: .deckA))
-        }
-        if let zone = ZoneLayout.all.first(where: { $0.name == .deckB }) {
-            drawFilterBar(level: deckBSnapshot.filterLevel, in: viewRect(from: zone.rect),
-                          color: zoneColor(for: .deckB))
-        }
-    }
-
-    private func drawFilterBar(level: Float, in rect: NSRect, color: NSColor) {
-        let barW: CGFloat = 6
-        let barX = rect.maxX - barW - 3
-        let barRect = NSRect(x: barX, y: rect.minY + 4, width: barW, height: rect.height - 8)
-
-        // Track
-        color.withAlphaComponent(0.1).setFill()
-        NSBezierPath(rect: barRect).fill()
-
-        // Fill
-        let fillH = barRect.height * CGFloat(level)
-        let fillRect = NSRect(x: barRect.minX, y: barRect.minY, width: barW, height: fillH)
-        color.withAlphaComponent(0.5).setFill()
-        NSBezierPath(rect: fillRect).fill()
-
-        // Label
-        let attrs: [NSAttributedString.Key: Any] = [
-            .foregroundColor: color.withAlphaComponent(0.5),
-            .font: NSFont.monospacedSystemFont(ofSize: 7, weight: .regular),
-        ]
-        NSAttributedString(string: "F", attributes: attrs)
-            .draw(at: NSPoint(x: barX + 1, y: barRect.maxY + 2))
-    }
-
-    // MARK: - Coordinate Conversion
-
-    /// Converts a normalized position (origin lower-left) to view points.
-    private func viewPoint(from normalized: CGPoint) -> NSPoint {
-        NSPoint(x: normalized.x * bounds.width, y: normalized.y * bounds.height)
-    }
-
-    private func viewRect(from normalizedRect: CGRect) -> NSRect {
-        NSRect(
-            x: normalizedRect.minX * bounds.width,
-            y: normalizedRect.minY * bounds.height,
-            width: normalizedRect.width * bounds.width,
-            height: normalizedRect.height * bounds.height
-        )
-    }
-
-    // MARK: - Zone Colors
-
-    private func zoneColor(for name: Zone.Name) -> NSColor {
-        switch name {
-        case .topStrip:    return NSColor(red: 0.20, green: 0.80, blue: 0.90, alpha: 1)
-        case .deckA:       return NSColor(red: 0.35, green: 0.65, blue: 1.00, alpha: 1)
-        case .deckB:       return NSColor(red: 1.00, green: 0.55, blue: 0.25, alpha: 1)
-        case .bottomStrip: return NSColor(red: 0.75, green: 0.35, blue: 0.95, alpha: 1)
+    private func deckColor(for deck: DeckID) -> NSColor {
+        switch deck {
+        case .a: return NSColor(red: 0.35, green: 0.65, blue: 1, alpha: 1)
+        case .b: return NSColor(red: 1, green: 0.55, blue: 0.25, alpha: 1)
         }
     }
 }

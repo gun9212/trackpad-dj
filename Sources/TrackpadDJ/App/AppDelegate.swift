@@ -10,7 +10,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         let vc = TouchLabViewController()
         let window = NSWindow(contentViewController: vc)
         window.setContentSize(NSSize(width: 900, height: 600))
-        window.title = "Trackpad DJ — Touch Lab"
+        window.title = "Trackpad DJ — Single Jog"
         window.center()
         window.appearance = NSAppearance(named: .darkAqua)
         window.backgroundColor = NSColor(white: 0.08, alpha: 1.0)

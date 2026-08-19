@@ -9,6 +9,7 @@ final class TouchLabViewController: NSViewController {
     private let audioEngine = AudioEngine()
     private var displayTimer: Timer?
     private var loadStatusByDeck: [DeckID: String] = [:]
+    private var operationStatus: String?
 
     override func loadView() {
         touchLabView = TouchLabView(frame: NSRect(x: 0, y: 0, width: 900, height: 600))
@@ -50,6 +51,7 @@ final class TouchLabViewController: NSViewController {
     func shutdown() {
         displayTimer?.invalidate()
         displayTimer = nil
+        touchLabView?.shutdown()
         audioEngine.shutdown()
     }
 
@@ -66,6 +68,8 @@ final class TouchLabViewController: NSViewController {
 
     private func handle(_ action: DJAction) {
         switch action {
+        case .selectActiveDeck:
+            break
         case .adjustCrossfader(let delta):
             audioEngine.adjustCrossfader(by: delta)
         case .stepCrossfader(let direction):
@@ -103,7 +107,23 @@ final class TouchLabViewController: NSViewController {
             audioEngine.setScratch(deck: deck, rate: rate)
         case .endScratch(let deck):
             audioEngine.endScratch(deck: deck)
-        case .tapBPM:
+        case .setPitchBend(let deck, let percent):
+            audioEngine.setPitchBend(deck: deck, percent: percent)
+        case .endPitchBend(let deck):
+            audioEngine.endPitchBend(deck: deck)
+        case .tapBPM(let deck):
+            audioEngine.tapBPM(deck: deck, at: CACurrentMediaTime())
+            refreshDisplaySnapshot()
+        case .restoreAutomaticBPM(let deck):
+            audioEngine.restoreAutomaticBPM(deck: deck)
+            operationStatus = "Deck \(deck.displayName) automatic BPM restored"
+            refreshStatusMessage()
+            refreshDisplaySnapshot()
+        case .syncTempo(let deck):
+            operationStatus = audioEngine.syncTempo(activeDeck: deck).statusMessage
+            refreshStatusMessage()
+            refreshDisplaySnapshot()
+        case .toggleCursorLock, .cancelJogAndUnlock:
             break
         }
     }
@@ -149,7 +169,8 @@ final class TouchLabViewController: NSViewController {
     private func refreshStatusMessage() {
         let status = [DeckID.a, .b]
             .compactMap { loadStatusByDeck[$0] }
-            .joined(separator: "   |   ")
-        touchLabView.statusMessage = status.isEmpty ? nil : status
+            + [operationStatus].compactMap { $0 }
+        let message = status.joined(separator: "   |   ")
+        touchLabView.statusMessage = message.isEmpty ? nil : message
     }
 }
