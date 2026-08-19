@@ -9,6 +9,7 @@ final class TouchLabViewController: NSViewController {
     private let audioEngine = AudioEngine()
     private var displayTimer: Timer?
     private var loadStatusByDeck: [DeckID: String] = [:]
+    private var outputStatus: String?
 
     override func loadView() {
         touchLabView = TouchLabView(frame: NSRect(x: 0, y: 0, width: 900, height: 600))
@@ -56,6 +57,10 @@ final class TouchLabViewController: NSViewController {
         touchLabView.onAction = { [weak self] action in
             self?.handle(action)
         }
+        audioEngine.onRoutingError = { [weak self] message in
+            self?.refreshOutputStatus(error: message)
+        }
+        refreshOutputStatus(error: audioEngine.routingErrorMessage)
     }
 
     private func handle(_ action: DJAction) {
@@ -82,6 +87,19 @@ final class TouchLabViewController: NSViewController {
             audioEngine.adjustTempo(deck: deck, by: delta)
         case .resetTempo(let deck):
             audioEngine.resetTempo(deck: deck)
+        case .toggleMonitor(let deck):
+            audioEngine.toggleMonitor(deck: deck)
+            refreshOutputStatus(error: audioEngine.routingErrorMessage)
+        case .toggleOutputMode:
+            Task { @MainActor [weak self] in
+                guard let self else { return }
+                do {
+                    try await self.audioEngine.toggleOutputMode()
+                    self.refreshOutputStatus(error: nil)
+                } catch {
+                    self.refreshOutputStatus(error: error.localizedDescription)
+                }
+            }
         case .setScratch(let deck, let rate):
             audioEngine.setScratch(deck: deck, rate: rate)
         case .endScratch(let deck):
@@ -128,12 +146,32 @@ final class TouchLabViewController: NSViewController {
 
     private func setLoadStatus(_ status: String?, for deck: DeckID) {
         loadStatusByDeck[deck] = status
-        touchLabView.statusMessage = [DeckID.a, .b]
+        refreshStatusMessage()
+    }
+
+    private func refreshOutputStatus(error: String?) {
+        if let error {
+            outputStatus = "AUDIO STOPPED — \(error)"
+        } else if audioEngine.outputMode == .splitCue {
+            let monitoredDecks = [
+                audioEngine.isMonitorEnabled(deck: .a) ? "A" : nil,
+                audioEngine.isMonitorEnabled(deck: .b) ? "B" : nil,
+            ].compactMap { $0 }.joined(separator: "+")
+            outputStatus = "SPLIT CUE — L: MASTER / R: CUE — MON \(monitoredDecks.isEmpty ? "OFF" : monitoredDecks)"
+        } else {
+            outputStatus = nil
+        }
+        refreshStatusMessage()
+    }
+
+    private func refreshStatusMessage() {
+        let loadStatuses = [DeckID.a, .b]
             .compactMap { loadStatusByDeck[$0] }
             .joined(separator: "   |   ")
-        if touchLabView.statusMessage?.isEmpty == true {
-            touchLabView.statusMessage = nil
-        }
+        touchLabView.statusMessage = [outputStatus, loadStatuses.isEmpty ? nil : loadStatuses]
+            .compactMap { $0 }
+            .joined(separator: "   |   ")
+        if touchLabView.statusMessage == "" { touchLabView.statusMessage = nil }
     }
 
     // MARK: - HUD Updates

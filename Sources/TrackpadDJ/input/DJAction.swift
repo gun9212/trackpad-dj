@@ -17,6 +17,8 @@ enum DJAction: Equatable, Sendable {
     case adjustVolume(DeckID, Float)
     case adjustTempo(DeckID, Double)
     case resetTempo(DeckID)
+    case toggleMonitor(DeckID)
+    case toggleOutputMode
     case setScratch(DeckID, Double)
     case endScratch(DeckID)
     case tapBPM(DeckID)

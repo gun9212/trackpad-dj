@@ -294,7 +294,7 @@ final class TouchLabView: NSView {
                 handleBpmTap(deck: deck)
             case .load, .togglePlay, .cue, .nudge, .adjustVolume,
                  .adjustTempo, .resetTempo, .adjustCrossfader, .stepCrossfader,
-                 .setHotCue, .jumpToHotCue:
+                 .toggleMonitor, .toggleOutputMode, .setHotCue, .jumpToHotCue:
                 break
             }
             onAction?(action)

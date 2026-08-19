@@ -143,7 +143,11 @@ final class DeckRenderer: @unchecked Sendable {
 @MainActor
 final class Deck: DeckProtocol {
 
+    /// Post-EQ master path. Channel fader and crossfader gains are applied here.
     let mixerNode = AVAudioMixerNode()
+
+    /// Post-EQ, pre-fader monitor path. It is disconnected in stereo master mode.
+    let cueMixerNode = AVAudioMixerNode()
 
     let eqNode: AVAudioUnitEQ = {
         let eq = AVAudioUnitEQ(numberOfBands: 1)
@@ -169,6 +173,11 @@ final class Deck: DeckProtocol {
     var volume: Float {
         get { mixerNode.outputVolume }
         set { mixerNode.outputVolume = newValue }
+    }
+
+    var cueVolume: Float {
+        get { cueMixerNode.outputVolume }
+        set { cueMixerNode.outputVolume = newValue }
     }
 
     var playbackProgress: Double {

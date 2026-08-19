@@ -16,6 +16,9 @@ enum KeyboardMapping {
         case 45: return .tapBPM(.b)          // N
         case 23: return .resetTempo(.a)       // 5
         case 22: return .resetTempo(.b)       // 6
+        case 8: return .toggleMonitor(.a)     // C
+        case 9: return .toggleMonitor(.b)     // V
+        case 46: return .toggleOutputMode     // M
         case 18, 19, 20, 21:                 // 1, 2, 3, 4
             let index = Int(keyCode) - 18
             return shift ? .setHotCue(.a, index) : .jumpToHotCue(.a, index)
