@@ -18,9 +18,10 @@ DerivedData/
 # Claude Code local settings
 .claude/settings.local.json
 
-# Markdown (README.md 제외)
+# Markdown (프로젝트 기준 문서 제외)
 *.md
 !README.md
+!AGENTS.md
 
 # macOS
 .DS_Store
