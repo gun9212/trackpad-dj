@@ -4,10 +4,18 @@ import Foundation
 /// A single touch contact captured at a specific moment in time.
 ///
 /// Immutable. Use the `moving(to:)` helper to produce an updated copy.
-struct TouchPoint {
+struct TouchID: RawRepresentable, Hashable, Comparable, Sendable {
+    let rawValue: UInt64
+
+    static func < (lhs: TouchID, rhs: TouchID) -> Bool {
+        lhs.rawValue < rhs.rawValue
+    }
+}
+
+struct TouchPoint: Equatable, Sendable {
 
     /// Stable identifier for this touch across begin / moved / ended phases.
-    let identity: ObjectIdentifier
+    let identity: TouchID
 
     /// Normalized trackpad position in [0, 1] × [0, 1].
     /// Origin is at the lower-left corner of the trackpad.

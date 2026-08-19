@@ -3,9 +3,9 @@ import Foundation
 /// The current set of active touches on the trackpad.
 ///
 /// Immutable. All mutations return a new instance.
-struct TouchSession {
+struct TouchSession: Equatable, Sendable {
 
-    let activeTouches: [ObjectIdentifier: TouchPoint]
+    let activeTouches: [TouchID: TouchPoint]
 
     static let empty = TouchSession(activeTouches: [:])
 
@@ -23,7 +23,7 @@ struct TouchSession {
         return TouchSession(activeTouches: updated)
     }
 
-    func removing(identity: ObjectIdentifier) -> TouchSession {
+    func removing(identity: TouchID) -> TouchSession {
         var updated = activeTouches
         updated.removeValue(forKey: identity)
         return TouchSession(activeTouches: updated)

@@ -4,6 +4,7 @@ import Foundation
 ///
 /// Current implementation: `Deck` (AVAudioSourceNode-based)
 /// Future implementation: `SuperpoweredDeck` (if key-lock / BPM analysis needed)
+@MainActor
 protocol DeckProtocol: AnyObject {
 
     /// Whether the deck is currently playing.
@@ -17,7 +18,7 @@ protocol DeckProtocol: AnyObject {
 
     // MARK: - Transport
 
-    func load(url: URL) throws
+    func install(_ track: LoadedTrack)
     func togglePlayPause()
     func cue()
 
@@ -26,6 +27,25 @@ protocol DeckProtocol: AnyObject {
     /// Scrub forward (positive) or backward (negative) by a normalized delta.
     /// Full trackpad width (1.0) corresponds to a fixed number of seconds.
     func scrub(normalizedDelta: Double)
+
+    // MARK: - Realtime Controls
+
+    func setScratch(rate: Double)
+    func endScratch()
+    func setPitchBendPercent(_ value: Double)
+    func endPitchBend()
+    func setTempoPercent(_ value: Double)
+    func adjustTempoPercent(by delta: Double)
+    func resetTempo()
+    var tempoPercent: Double { get }
+    var pitchBendPercent: Double { get }
+
+    // MARK: - Beat Grid
+
+    var beatGrid: BeatGrid? { get }
+    var automaticBeatGrid: BeatGrid? { get }
+    func applyBeatGrid(_ beatGrid: BeatGrid?)
+    func restoreAutomaticBeatGrid()
 
     // MARK: - Waveform
 
