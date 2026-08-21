@@ -68,7 +68,7 @@ Scripts/verify-strict-concurrency.sh
 git diff --check
 ```
 
-현재 기준으로 `swift test`는 55개 테스트가 모두 통과해야 합니다. 엄격 동시성 스크립트는 `-strict-concurrency=complete -warnings-as-errors`로 별도 빌드하며, `git diff --check`는 성공 시 아무 내용도 출력하지 않습니다.
+현재 기준으로 `swift test`는 56개 테스트가 모두 통과해야 합니다. 엄격 동시성 스크립트는 `-strict-concurrency=complete -warnings-as-errors`로 별도 빌드하며, `git diff --check`는 성공 시 아무 내용도 출력하지 않습니다.
 
 자동 테스트는 실제 트랙패드 감각, 다양한 장르의 BPM 정확도, 헤드폰 채널 청취, 레이턴시, 클릭 노이즈나 30분 연속 믹싱을 증명하지 않습니다. 실기기 결과는 [Docs/Verification.md](Docs/Verification.md)의 체크리스트에 기록합니다.
 
@@ -84,8 +84,9 @@ git diff --check
 - 세로로 쌓인 2덱 파형, 중앙 단일 플래터와 덱별 퍼포먼스 콘솔
 - 실제 렌더 신호를 읽는 덱별 프리페이더 피크 미터
 - 활성 덱 선택과 핵심 명령을 지원하는 클릭 가능한 화면 버튼
+- 입력·수명주기 뷰와 불변 상태 기반 퍼포먼스 콘솔 렌더러의 분리
 - 렌더러 단독 재생 위치와 atomic 실시간 명령 경계
-- 입력, 렌더, BPM, SYNC, 커서, UI와 라우팅을 다루는 55개 자동 테스트
+- 입력, 렌더, BPM, SYNC, 커서, UI와 라우팅을 다루는 56개 자동 테스트
 
 ## 퍼포먼스 콘솔
 
