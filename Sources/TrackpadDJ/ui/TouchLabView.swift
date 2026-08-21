@@ -1,6 +1,6 @@
 import AppKit
 
-/// Renders two deck waveforms and translates keyboard / trackpad input into DJ actions.
+/// Owns keyboard / trackpad input and supplies state for performance-console rendering.
 @MainActor
 final class TouchLabView: NSView {
 
