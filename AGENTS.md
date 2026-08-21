@@ -218,6 +218,7 @@ Sources/TrackpadDJ/
 └── ui/
     ├── CursorLockController.swift
     ├── PerformanceLayout.swift
+    ├── PerformanceConsoleRenderer.swift
     ├── TouchLabView.swift
     └── TouchLabViewController.swift
 ```
@@ -228,13 +229,14 @@ Sources/TrackpadDJ/
 - `input/`: 키보드 상태, BPM 탭, 원시 터치와 의미 단위 `DJAction`
 - `gestures/`: 전체 표면 단일 조그의 결정론적 터치 상태 머신
 - `audio/`: 비동기 로드, 덱 재생, atomic 실시간 상태, 믹싱, 라우팅과 UI 스냅샷
-- `ui/`: 반응형 레이아웃과 hit test, 입력 이벤트 수신, 퍼포먼스 콘솔·파형 렌더링과 오디오 콜백 연결
+- `ui/`: 반응형 레이아웃과 hit test, 입력 이벤트 수신, 불변 상태 기반 퍼포먼스 콘솔·파형 렌더링과 오디오 콜백 연결
 - `config/`: 레이아웃, 감도와 키 매핑이 충분히 커질 때 도입할 수 있는 예정 경계
 
 경계 규칙:
 
 - 원시 입력 처리와 오디오 파라미터 적용을 직접 결합하지 않는다.
 - UI는 의미 단위 콜백으로 명령을 전달하고 `DeckSnapshot`과 `MixerSnapshot`으로 오디오 상태를 읽는다.
+- `TouchLabView`는 입력·수명주기와 렌더 상태 조립을 담당하고, `PerformanceConsoleRenderer`는 한 표시 주기의 불변 상태만 소비한다.
 - 제스처 판정 규칙을 오디오 렌더 콜백에 넣지 않는다.
 - 오디오 렌더 경로에는 블로킹 I/O, 메모리 할당, UI 접근과 로그 출력을 추가하지 않는다.
 - 공유 오디오 상태를 추가할 때는 UI 스레드와 실시간 오디오 스레드 간 동시성을 명시적으로 검토한다.
