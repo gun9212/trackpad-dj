@@ -138,6 +138,38 @@ final class PerformanceUITests: XCTestCase {
         }
     }
 
+    @MainActor
+    func testPerformanceConsoleRendererDrawsImmutableSnapshotOffscreen() {
+        let size = NSSize(width: 1_180, height: 720)
+        let state = PerformanceConsoleRenderState(
+            bounds: NSRect(origin: .zero, size: size),
+            deckA: snapshot(deck: .a, bpm: 120),
+            deckB: snapshot(deck: .b, bpm: 124),
+            mixer: .initial,
+            activeDeck: .b,
+            jogDeck: .a,
+            jogMode: .pitchBend,
+            jogValue: 2.5,
+            touchSession: .empty,
+            isCursorLocked: true,
+            hoveredControl: nil,
+            pressedControl: nil,
+            displayedPeakA: 0.8,
+            displayedPeakB: 0.5,
+            activeDeckTransitionProgress: 0.4,
+            reducesMotion: false,
+            statusMessage: "TEST STATUS",
+            cursorStatusMessage: nil
+        )
+        let image = NSImage(size: size)
+
+        image.lockFocus()
+        PerformanceConsoleRenderer(state: state).draw()
+        image.unlockFocus()
+
+        XCTAssertGreaterThan(image.tiffRepresentation?.count ?? 0, 1_000)
+    }
+
     private func snapshot(deck: DeckID, bpm: Double) -> DeckSnapshot {
         DeckSnapshot(
             deck: deck,
