@@ -52,6 +52,7 @@ final class HotCueAudioTests: XCTestCase {
     func testJumpStartsPlaybackAtDestinationAndCrossfadesAtBothSampleRates() throws {
         for rate in [44_100.0, 48_000.0] {
             for block in [64, 256] {
+              for alreadyPlaying in [false, true] {
                 let format = try XCTUnwrap(AVAudioFormat(standardFormatWithSampleRate: rate, channels: 2))
                 let source = try XCTUnwrap(AVAudioPCMBuffer(pcmFormat: format, frameCapacity: 4096))
                 source.frameLength = 4096
@@ -63,9 +64,14 @@ final class HotCueAudioTests: XCTestCase {
                 let output = try XCTUnwrap(AVAudioPCMBuffer(pcmFormat: format, frameCapacity: AVAudioFrameCount(block)))
                 output.frameLength = AVAudioFrameCount(block)
                 var silence = ObjCBool(false)
+                if alreadyPlaying {
+                    state.setPlaying(true)
+                    _ = renderer.render(isSilence: &silence, frameCount: output.frameLength,
+                                        audioBufferList: output.mutableAudioBufferList)
+                }
                 state.requestSeek(to: 1500, startsPlayback: true)
                 state.requestSeek(to: 2048, startsPlayback: true)
-                var previous: Float = 0
+                var previous: Float = alreadyPlaying ? 0.5 : 0
                 for _ in 0..<(512 / block) {
                     XCTAssertEqual(renderer.render(isSilence: &silence, frameCount: output.frameLength,
                                                    audioBufferList: output.mutableAudioBufferList), noErr)
@@ -80,6 +86,7 @@ final class HotCueAudioTests: XCTestCase {
                 XCTAssertEqual(previous, -0.5, accuracy: 0.001)
                 XCTAssertEqual(state.publicReadPosition, 2560)
                 XCTAssertTrue(state.isPlaying)
+              }
             }
         }
     }
@@ -88,6 +95,7 @@ final class HotCueAudioTests: XCTestCase {
         let format = try XCTUnwrap(AVAudioFormat(standardFormatWithSampleRate: 8_000, channels: 1))
         let buffer = try XCTUnwrap(AVAudioPCMBuffer(pcmFormat: format, frameCapacity: 1024))
         buffer.frameLength = 1024
+        for index in 0..<1024 { buffer.floatChannelData![0][index] = 0 }
         let state = DeckRealtimeState()
         let renderer = DeckRenderer(audio: DeckAudioData(buffer: buffer, format: format, preRollFrames: 0), state: state)
         let output = try XCTUnwrap(AVAudioPCMBuffer(pcmFormat: format, frameCapacity: 64))

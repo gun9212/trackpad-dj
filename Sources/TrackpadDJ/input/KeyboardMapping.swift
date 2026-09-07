@@ -8,6 +8,9 @@ enum KeyboardMapping {
         activeDeck: DeckID
     ) -> DJAction? {
         switch keyCode {
+        case 18...21:
+            let slot = HotCueSlot(rawValue: Int(keyCode) - 17)!
+            return shift ? .clearHotCue(activeDeck, slot) : .activateHotCue(activeDeck, slot)
         case 48: return .selectActiveDeck(activeDeck.other) // Tab
         case 123: return .stepCrossfader(-1)                // Left arrow
         case 124: return .stepCrossfader(1)                 // Right arrow

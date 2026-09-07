@@ -19,6 +19,11 @@ final class TouchLabView: NSView {
     private var pointerTrackingArea: NSTrackingArea?
     private var hoveredControl: PerformanceControl?
     private var pressedControl: PerformanceControl?
+    private var pressedControlShift = false
+    private var flashedHotCue: PerformanceControl?
+    private var hotCueFlashTime: Double = 0
+
+    func prepareForTermination() { cancelActiveInput() }
     private var displayedPeakA: Float = 0
     private var displayedPeakB: Float = 0
     private var lastMeterUpdate = CACurrentMediaTime()
@@ -353,6 +358,12 @@ final class TouchLabView: NSView {
     private func emit(_ actions: [DJAction]) {
         for action in actions {
             switch action {
+            case .activateHotCue(let deck, let slot):
+                flashedHotCue = .hotCue(deck, slot)
+                hotCueFlashTime = CACurrentMediaTime()
+                needsDisplay = true
+            case .clearHotCue:
+                break
             case .selectActiveDeck:
                 activeDeckTransitionStartedAt = CACurrentMediaTime()
                 needsDisplay = true
@@ -444,6 +455,7 @@ final class TouchLabView: NSView {
             return
         }
         pressedControl = control
+        pressedControlShift = event.modifierFlags.contains(.shift)
         hoveredControl = control
         needsDisplay = true
     }
@@ -461,7 +473,7 @@ final class TouchLabView: NSView {
         hoveredControl = releasedControl
         if !isCursorLocked, gestureStateMachine.session.count < 2,
            releasedControl == pressedControl, isControlEnabled(pressedControl) {
-            activate(pressedControl)
+            activate(pressedControl, shift: pressedControlShift)
         }
         needsDisplay = true
     }
@@ -481,8 +493,8 @@ final class TouchLabView: NSView {
         )
     }
 
-    private func activate(_ control: PerformanceControl) {
-        emit(keyboardStateMachine.activate(control))
+    private func activate(_ control: PerformanceControl, shift: Bool = false) {
+        emit(keyboardStateMachine.activate(control, shift: shift))
     }
 
     private func cursorPointInView() -> NSPoint {
@@ -501,7 +513,7 @@ final class TouchLabView: NSView {
 
     override func draw(_ dirtyRect: NSRect) {
         let reducesMotion = NSWorkspace.shared.accessibilityDisplayShouldReduceMotion
-        let renderState = PerformanceConsoleRenderState(
+        var renderState = PerformanceConsoleRenderState(
             bounds: bounds,
             deckA: deckASnapshot,
             deckB: deckBSnapshot,
@@ -521,6 +533,7 @@ final class TouchLabView: NSView {
             statusMessage: statusMessage,
             cursorStatusMessage: cursorStatusMessage
         )
+        renderState.flashedHotCue = CACurrentMediaTime() - hotCueFlashTime < 0.14 ? flashedHotCue : nil
         PerformanceConsoleRenderer(state: renderState).draw()
     }
 

@@ -55,6 +55,14 @@ final class TouchLabViewController: NSViewController {
         audioEngine.shutdown()
     }
 
+    func flushHotCues() async -> Bool {
+        await audioEngine.flushHotCues()
+    }
+
+    func prepareForTermination() {
+        touchLabView?.prepareForTermination()
+    }
+
     // MARK: - Wiring
 
     private func wireCallbacks() {
@@ -78,6 +86,12 @@ final class TouchLabViewController: NSViewController {
             audioEngine.togglePlayPause(deck: deck)
         case .cue(let deck):
             audioEngine.cue(deck: deck)
+        case .activateHotCue(let deck, let slot):
+            audioEngine.activateHotCue(deck: deck, slot: slot)
+            refreshDisplaySnapshot()
+        case .clearHotCue(let deck, let slot):
+            audioEngine.clearHotCue(deck: deck, slot: slot)
+            refreshDisplaySnapshot()
         case .nudge(let deck, let delta):
             audioEngine.scrub(deck: deck, deltaX: delta)
         case .adjustFilter(let deck, let delta):

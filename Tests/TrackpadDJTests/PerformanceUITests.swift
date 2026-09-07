@@ -5,6 +5,40 @@ import XCTest
 final class PerformanceUITests: XCTestCase {
 
     @MainActor
+    func testHotCueClickLatchesShiftAtMouseDownAndSelectsDeckFirst() throws {
+        let view = TouchLabView(frame: NSRect(x: 0, y: 0, width: 960, height: 620))
+        defer { view.shutdown() }
+        view.apply(deckA: snapshot(deck: .a, bpm: 120), deckB: snapshot(deck: .b, bpm: 120), mixer: .initial)
+        var actions: [DJAction] = []
+        view.onAction = { actions.append($0) }
+        let rect = try XCTUnwrap(PerformanceLayout(bounds: view.bounds).region(for: .hotCue(.b, .three))).frame
+        func mouse(_ type: NSEvent.EventType, shift: Bool) throws -> NSEvent {
+            try XCTUnwrap(NSEvent.mouseEvent(with: type, location: NSPoint(x: rect.midX, y: rect.midY),
+                modifierFlags: shift ? [.shift] : [], timestamp: 0, windowNumber: 0, context: nil,
+                eventNumber: 0, clickCount: 1, pressure: 1))
+        }
+        view.mouseDown(with: try mouse(.leftMouseDown, shift: true))
+        view.mouseUp(with: try mouse(.leftMouseUp, shift: false))
+        XCTAssertEqual(actions, [.selectActiveDeck(.b), .clearHotCue(.b, .three)])
+        view.mouseDown(with: try mouse(.leftMouseDown, shift: false))
+        view.mouseUp(with: try mouse(.leftMouseUp, shift: true))
+        XCTAssertEqual(actions.last, .activateHotCue(.b, .three))
+    }
+
+    func testHotCueKeysDoNotRepeatAndFollowActiveDeck() {
+        var keyboard = KeyboardStateMachine()
+        for slot in HotCueSlot.allCases {
+            let key = UInt16(slot.rawValue + 17)
+            XCTAssertEqual(keyboard.keyDown(keyCode: key, isRepeat: false, shift: false), [.activateHotCue(.a, slot)])
+            XCTAssertEqual(keyboard.keyDown(keyCode: key, isRepeat: true, shift: false), [])
+            keyboard.keyUp(keyCode: key)
+            XCTAssertFalse(KeyboardMapping.handles(key, shift: false, hasSystemModifier: true))
+        }
+        _ = keyboard.selectActiveDeck(.b)
+        XCTAssertEqual(keyboard.keyDown(keyCode: 18, isRepeat: false, shift: true), [.clearHotCue(.b, .one)])
+    }
+
+    @MainActor
     func testLiftingOneFingerRestoresCursorExactlyOnceWithoutAutomaticRelock() throws {
         let system = JogCursorSystem()
         let lock = CursorLockController(system: system)
@@ -89,7 +123,7 @@ final class PerformanceUITests: XCTestCase {
         for size in sizes {
             let bounds = NSRect(origin: .zero, size: size)
             let layout = PerformanceLayout(bounds: bounds)
-            XCTAssertEqual(layout.controlRegions.count, 13)
+            XCTAssertEqual(layout.controlRegions.count, 21)
 
             for region in layout.controlRegions {
                 XCTAssertGreaterThan(region.frame.width, 0)
@@ -209,6 +243,9 @@ final class PerformanceUITests: XCTestCase {
 
             let rendered = view.dataWithPDF(inside: view.bounds)
             XCTAssertGreaterThan(rendered.count, 1_000)
+            if let directory = ProcessInfo.processInfo.environment["TRACKPAD_DJ_RENDER_DIR"] {
+                try? rendered.write(to: URL(fileURLWithPath: directory).appendingPathComponent("console-\(Int(size.width)).pdf"))
+            }
             view.shutdown()
         }
     }
