@@ -88,7 +88,10 @@ final class DeckRenderer: @unchecked Sendable {
                     readPosition = max(-audio.preRollFrames, readPosition + advance)
                 } else {
                     readPosition = Double(totalFrames)
-                    state.setPlaying(false)
+                    // Scratching across the end must not clear transport intent.
+                    if !isScratchActive {
+                        state.setPlaying(false)
+                    }
                 }
                 continue
             }

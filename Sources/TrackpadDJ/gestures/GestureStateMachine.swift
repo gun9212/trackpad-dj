@@ -33,7 +33,6 @@ struct GestureStateMachine {
     let configuration: Configuration
     private(set) var session: TouchSession = .empty
     private var control: ControlState?
-    private var controllerClaimedForSession = false
 
     init(configuration: Configuration = .default) {
         self.configuration = configuration
@@ -60,21 +59,21 @@ struct GestureStateMachine {
         mode: JogMode
     ) -> [DJAction] {
         let sorted = touches.sorted(by: Self.touchOrder)
-        let sessionWasEmpty = session.count == 0
+        let previousCount = session.count
         for touch in sorted {
             session = session.adding(touch)
         }
 
-        guard sessionWasEmpty,
-              !controllerClaimedForSession,
-              let first = sorted.first else { return [] }
+        guard previousCount < 2, session.count >= 2, control == nil,
+              let first = session.activeTouches.values.sorted(by: Self.touchOrder).first,
+              let activationTime = sorted.last?.timestamp else { return [] }
 
-        controllerClaimedForSession = true
         control = ControlState(
             identity: first.identity,
             deck: deck,
             mode: mode,
-            lastPoint: first
+            lastPoint: TouchPoint(identity: first.identity, position: first.position,
+                                  timestamp: activationTime)
         )
         return [startAction(deck: deck, mode: mode)]
     }
@@ -115,8 +114,9 @@ struct GestureStateMachine {
             }
         }
 
-        if session.count == 0 {
-            controllerClaimedForSession = false
+        if session.count < 2, let current = control {
+            actions.append(endAction(deck: current.deck, mode: current.mode))
+            control = nil
         }
         return actions
     }
@@ -125,7 +125,6 @@ struct GestureStateMachine {
         let actions = control.map { [endAction(deck: $0.deck, mode: $0.mode)] } ?? []
         session = .empty
         control = nil
-        controllerClaimedForSession = false
         return actions
     }
 

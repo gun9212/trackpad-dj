@@ -107,12 +107,20 @@ final class InputStateMachineTests: XCTestCase {
 
         XCTAssertEqual(
             machine.process(.began([
-                point(id, x: 0.2, y: 0.2, time: 1)
+                point(id, x: 0.2, y: 0.2, time: 1),
+                point(TouchID(rawValue: 2), x: 0.6, y: 0.2, time: 1)
             ], deck: .a, mode: .scratch)),
             [.setScratch(.a, 0)]
         )
         assertSingleValue(
             machine.process(.moved([point(id, x: 0.95, y: 0.3, time: 1.01)])),
+            expected: .scratch(deck: .a, value: 8)
+        )
+        XCTAssertEqual(machine.process(.began([
+            point(TouchID(rawValue: 3), x: 0.7, y: 0.3, time: 1.02)
+        ], deck: .b, mode: .pitchBend)), [])
+        assertSingleValue(
+            machine.process(.moved([point(id, x: 0.95, y: 0.4, time: 1.03)])),
             expected: .scratch(deck: .a, value: 8)
         )
         XCTAssertEqual(machine.process(.ended([id])), [.endScratch(.a)])
@@ -124,7 +132,8 @@ final class InputStateMachineTests: XCTestCase {
 
         XCTAssertEqual(
             machine.process(.began([
-                point(id, x: 0.5, y: 0.5, time: 2)
+                point(id, x: 0.5, y: 0.5, time: 2),
+                point(TouchID(rawValue: 2), x: 0.6, y: 0.5, time: 2)
             ], deck: .b, mode: .pitchBend)),
             [.setPitchBend(.b, 0)]
         )
@@ -138,7 +147,7 @@ final class InputStateMachineTests: XCTestCase {
         XCTAssertEqual(machine.process(.ended([id])), [.endPitchBend(.b)])
     }
 
-    func testSecondaryTouchIsNeverPromotedWithinSameSession() {
+    func testRemainingFingerDoesNotJogAndNewSecondFingerRearms() {
         var machine = GestureStateMachine()
         let first = TouchID(rawValue: 1)
         let second = TouchID(rawValue: 2)
@@ -156,7 +165,7 @@ final class InputStateMachineTests: XCTestCase {
             machine.process(.began([
                 point(TouchID(rawValue: 3), x: 0.5, y: 0.5, time: 0.2)
             ], deck: .b, mode: .pitchBend)),
-            []
+            [.setPitchBend(.b, 0)]
         )
     }
 
@@ -176,7 +185,8 @@ final class InputStateMachineTests: XCTestCase {
     func testTraceReplayIsDeterministic() {
         let id = TouchID(rawValue: 1)
         let trace: [GestureInputEvent] = [
-            .began([point(id, x: 0.25, y: 0.5, time: 3)], deck: .b, mode: .scratch),
+            .began([point(id, x: 0.25, y: 0.5, time: 3),
+                    point(TouchID(rawValue: 2), x: 0.6, y: 0.5, time: 3)], deck: .b, mode: .scratch),
             .moved([point(id, x: 0.25, y: 0.52, time: 3.01)]),
             .tick(3.07),
             .ended([id]),
@@ -189,6 +199,26 @@ final class InputStateMachineTests: XCTestCase {
         assertSingleValue([firstReplay[1]], expected: .scratch(deck: .b, value: 6.6))
         XCTAssertEqual(firstReplay[2], .setScratch(.b, 0))
         XCTAssertEqual(firstReplay[3], .endScratch(.b))
+    }
+
+    func testSingleFingerWaitsAndReleasingSecondFingerEndsJog() {
+        var machine = GestureStateMachine()
+        let first = TouchID(rawValue: 1)
+        let second = TouchID(rawValue: 2)
+        XCTAssertEqual(machine.process(.began([
+            point(first, x: 0.2, y: 0.2, time: 0)
+        ], deck: .a, mode: .scratch)), [])
+        XCTAssertEqual(machine.process(.moved([
+            point(first, x: 0.2, y: 0.4, time: 1)
+        ])), [])
+        XCTAssertEqual(machine.process(.began([
+            point(second, x: 0.6, y: 0.4, time: 2)
+        ], deck: .b, mode: .scratch)), [.setScratch(.b, 0)])
+        assertSingleValue(machine.process(.moved([
+            point(first, x: 0.2, y: 0.42, time: 2.01)
+        ])), expected: .scratch(deck: .b, value: 6.6))
+        XCTAssertEqual(machine.process(.ended([second])), [.endScratch(.b)])
+        XCTAssertEqual(machine.process(.tick(3)), [])
     }
 
     private enum ExpectedJogValue {
