@@ -4,6 +4,7 @@ enum PerformanceControl: Equatable, Hashable {
     case selectDeck(DeckID)
     case load(DeckID)
     case cue(DeckID)
+    case hotCue(DeckID, HotCueSlot)
     case togglePlay(DeckID)
     case sync(DeckID)
     case monitor(DeckID)
@@ -11,6 +12,7 @@ enum PerformanceControl: Equatable, Hashable {
 
     var deck: DeckID? {
         switch self {
+        case .hotCue(let deck, _): return deck
         case .selectDeck(let deck), .load(let deck), .cue(let deck),
              .togglePlay(let deck), .sync(let deck), .monitor(let deck):
             return deck
@@ -21,6 +23,7 @@ enum PerformanceControl: Equatable, Hashable {
 
     var action: DJAction? {
         switch self {
+        case .hotCue(let deck, let slot): return .activateHotCue(deck, slot)
         case .selectDeck(let deck): return .selectActiveDeck(deck)
         case .load(let deck): return .load(deck)
         case .cue(let deck): return .cue(deck)
@@ -33,6 +36,7 @@ enum PerformanceControl: Equatable, Hashable {
 
     var title: String {
         switch self {
+        case .hotCue(_, let slot): return "HOT \(slot.rawValue)"
         case .selectDeck(let deck): return "DECK \(deck.displayName)"
         case .load: return "LOAD"
         case .cue: return "CUE"
@@ -45,6 +49,7 @@ enum PerformanceControl: Equatable, Hashable {
 
     var keyHint: String? {
         switch self {
+        case .hotCue(_, let slot): return "\(slot.rawValue)"
         case .selectDeck: return "TAB"
         case .load: return "Q"
         case .cue: return "C"
@@ -231,7 +236,14 @@ struct PerformanceLayout {
                 )
             )
         }
-        return [selector] + regions
+        let padWidth = max(0, rect.width - inset * 2 - gap * 3) / 4
+        let pads = HotCueSlot.allCases.map { slot in
+            PerformanceControlRegion(control: .hotCue(deck, slot), frame: NSRect(
+                x: rect.minX + inset + CGFloat(slot.index) * (padWidth + gap),
+                y: buttonY + buttonHeight + 8, width: padWidth, height: 40
+            ))
+        }
+        return [selector] + regions + pads
     }
 }
 
@@ -244,7 +256,7 @@ enum PerformanceControlPolicy {
         switch control {
         case .selectDeck, .load, .monitor, .toggleOutputMode:
             return true
-        case .cue(let deck), .togglePlay(let deck):
+        case .cue(let deck), .togglePlay(let deck), .hotCue(let deck, _):
             return snapshot(for: deck, deckA: deckA, deckB: deckB).duration > 0
         case .sync:
             return deckA.bpm != nil && deckB.bpm != nil
@@ -271,7 +283,7 @@ enum TouchRoutingPolicy {
 }
 
 extension KeyboardStateMachine {
-    mutating func activate(_ control: PerformanceControl) -> [DJAction] {
+    mutating func activate(_ control: PerformanceControl, shift: Bool = false) -> [DJAction] {
         var actions: [DJAction] = []
         if let deck = control.deck,
            let selection = selectActiveDeck(deck) {
@@ -280,7 +292,9 @@ extension KeyboardStateMachine {
         if case .selectDeck = control {
             return actions
         }
-        if let action = control.action {
+        if case .hotCue(let deck, let slot) = control, shift {
+            actions.append(.clearHotCue(deck, slot))
+        } else if let action = control.action {
             actions.append(action)
         }
         return actions

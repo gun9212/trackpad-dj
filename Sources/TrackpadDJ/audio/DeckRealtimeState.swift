@@ -4,6 +4,7 @@ import Foundation
 struct DeckSeekCommand: Equatable, Sendable {
     let generation: UInt64
     let targetFrame: Double
+    var startsPlayback = false
 }
 
 /// Lock-free state shared by the main actor and one audio render callback.
@@ -16,7 +17,8 @@ final class DeckRealtimeState: @unchecked Sendable {
     private let pitchBend = AtomicDouble(0)
     private let publishedPosition = AtomicDouble(0)
     private let preFaderPeak = AtomicPeak()
-    private let seekTarget = AtomicDouble(0)
+    private let seekTarget = ManagedAtomic<UInt64>(Double(0).bitPattern)
+    private let seekStartsPlayback = ManagedAtomic<Bool>(false)
     private let seekGeneration = ManagedAtomic<UInt64>(0)
 
     var isPlaying: Bool {
@@ -85,17 +87,24 @@ final class DeckRealtimeState: @unchecked Sendable {
     }
 
     @discardableResult
-    func requestSeek(to targetFrame: Double) -> UInt64 {
-        seekTarget.store(targetFrame)
-        return seekGeneration.wrappingIncrementThenLoad(ordering: .releasing)
+    func requestSeek(to targetFrame: Double, startsPlayback: Bool = false) -> UInt64 {
+        // Single main-actor writer, bounded read on the audio thread. Odd = publication in progress.
+        _ = seekGeneration.wrappingIncrementThenLoad(ordering: .sequentiallyConsistent)
+        seekTarget.store(targetFrame.bitPattern, ordering: .sequentiallyConsistent)
+        seekStartsPlayback.store(startsPlayback, ordering: .sequentiallyConsistent)
+        return seekGeneration.wrappingIncrementThenLoad(ordering: .sequentiallyConsistent)
     }
 
     func seekCommand(after consumedGeneration: UInt64) -> DeckSeekCommand? {
-        let generation = seekGeneration.load(ordering: .acquiring)
-        guard generation != consumedGeneration else { return nil }
+        let generation = seekGeneration.load(ordering: .sequentiallyConsistent)
+        guard generation.isMultiple(of: 2), generation != consumedGeneration else { return nil }
+        let target = Double(bitPattern: seekTarget.load(ordering: .sequentiallyConsistent))
+        let startsPlayback = seekStartsPlayback.load(ordering: .sequentiallyConsistent)
+        guard generation == seekGeneration.load(ordering: .sequentiallyConsistent) else { return nil }
         return DeckSeekCommand(
             generation: generation,
-            targetFrame: seekTarget.load()
+            targetFrame: target,
+            startsPlayback: startsPlayback
         )
     }
 

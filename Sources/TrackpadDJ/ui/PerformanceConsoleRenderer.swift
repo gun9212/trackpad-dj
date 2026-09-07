@@ -33,6 +33,7 @@ struct PerformanceConsoleRenderState {
     let reducesMotion: Bool
     let statusMessage: String?
     let cursorStatusMessage: String?
+    var flashedHotCue: PerformanceControl? = nil
 }
 
 /// Draws a complete console from a single immutable state snapshot.
@@ -228,6 +229,11 @@ struct PerformanceConsoleRenderer {
                 : ConsolePalette.primaryText
         )
 
+        if let message = snapshot.hotCueStorageMessage {
+            drawText(message,
+                     in: NSRect(x: rect.minX + 118, y: rect.maxY - 41, width: max(0, rect.width - 330), height: 11),
+                     font: .systemFont(ofSize: 8, weight: .medium), color: ConsolePalette.warning)
+        }
         let bpmText = snapshot.bpm.map { String(format: "%.1f", $0) } ?? "---.-"
         drawText(
             bpmText,
@@ -331,6 +337,21 @@ struct PerformanceConsoleRenderer {
         color.withAlphaComponent(0.32).setStroke()
         upcoming.stroke()
 
+        if snapshot.duration > 0 {
+            for slot in HotCueSlot.allCases {
+                guard let time = snapshot.hotCues[slot.index] else { continue }
+                let offset = time / snapshot.duration * Double(samples.count) - Double(center - visibleHalf)
+                let x = rect.minX + CGFloat(offset / Double(visibleHalf * 2)) * rect.width
+                guard x >= rect.minX, x <= rect.maxX else { continue }
+                let color = hotCueColor(slot)
+                color.setFill()
+                NSRect(x: x, y: rect.minY, width: 1, height: rect.height).fill()
+                drawText("\(slot.rawValue)",
+                         in: NSRect(x: min(x + 2, rect.maxX - 12), y: rect.minY, width: 12, height: 12),
+                         font: .monospacedSystemFont(ofSize: 9, weight: .bold), color: color)
+            }
+        }
+
         let playhead = NSBezierPath()
         playhead.move(to: NSPoint(x: rect.midX, y: rect.minY))
         playhead.line(to: NSPoint(x: rect.midX, y: rect.maxY))
@@ -379,6 +400,15 @@ struct PerformanceConsoleRenderer {
         }
     }
 
+    private func hotCueColor(_ slot: HotCueSlot) -> NSColor {
+        switch slot {
+        case .one: return .systemTeal
+        case .two: return .systemYellow
+        case .three: return .systemPink
+        case .four: return .systemGreen
+        }
+    }
+
     private func drawDeckConsole(
         snapshot: DeckSnapshot,
         in rect: NSRect,
@@ -416,7 +446,16 @@ struct PerformanceConsoleRenderer {
             )
         }
 
-        let buttonsTop = buttonControls.compactMap { layout.region(for: $0)?.frame.maxY }.max()
+        let pads = HotCueSlot.allCases.map { PerformanceControl.hotCue(snapshot.deck, $0) }
+        for slot in HotCueSlot.allCases {
+            let control = PerformanceControl.hotCue(snapshot.deck, slot)
+            guard let region = layout.region(for: control) else { continue }
+            let position = snapshot.hotCues[slot.index]
+            drawControlButton(control, in: region.frame, accent: hotCueColor(slot),
+                              isActive: position != nil,
+                              titleOverride: position.map { String(format: "%.2fs", $0) } ?? "SET")
+        }
+        let buttonsTop = (buttonControls + pads).compactMap { layout.region(for: $0)?.frame.maxY }.max()
             ?? rect.minY + 56
         let metricsRect = NSRect(
             x: rect.minX + 14,
@@ -605,7 +644,7 @@ struct PerformanceConsoleRenderer {
     ) {
         let enabled = isControlEnabled(control)
         let hovered = enabled && hoveredControl == control
-        let pressed = enabled && pressedControl == control
+        let pressed = enabled && (pressedControl == control || state.flashedHotCue == control)
         let fill: NSColor
         if !enabled {
             fill = ConsolePalette.raised.withAlphaComponent(0.32)

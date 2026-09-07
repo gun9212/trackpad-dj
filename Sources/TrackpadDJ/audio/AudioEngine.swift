@@ -42,6 +42,7 @@ final class AudioEngine {
 
     private let engine = AVAudioEngine()
     private let trackLoadCoordinator: TrackLoadCoordinator
+    private let hotCueLibrary: HotCueLibrary
     private let startsAudioEngine: Bool
     private var splitCueMatrices: [DeckID: SplitCueMatrix] = [:]
     private var isPreparingSplitCue = false
@@ -68,9 +69,12 @@ final class AudioEngine {
 
     init(
         trackLoader: any TrackLoading = TrackLoader(),
-        startsAudioEngine: Bool = true
+        startsAudioEngine: Bool = true,
+        hotCueStore: HotCueStore = HotCueStore()
     ) {
-        trackLoadCoordinator = TrackLoadCoordinator(loader: trackLoader)
+        let library = HotCueLibrary(store: hotCueStore)
+        hotCueLibrary = library
+        trackLoadCoordinator = TrackLoadCoordinator(loader: trackLoader, hotCueLibrary: library)
         self.startsAudioEngine = startsAudioEngine
         setup()
     }
@@ -371,7 +375,10 @@ final class AudioEngine {
             preFaderPeak: deck.consumePreFaderPeak(),
             faderLevel: deckID == .a ? faderA : faderB,
             filterLevel: normalizedFilterLevel(for: cutoff),
-            monitorEnabled: isMonitorEnabled(deck: deckID)
+            monitorEnabled: isMonitorEnabled(deck: deckID),
+            hotCues: deck.hotCues,
+            hotCueStorageMessage: deck.trackID.map { hotCueLibrary.status(for: $0) }
+                ?? (deck.trackName == nil ? nil : "HOT CUES · SESSION ONLY")
         )
     }
 
@@ -470,6 +477,7 @@ final class AudioEngine {
                 engine.detach(oldSource)
             }
             target.install(track)
+            if let id = track.trackID { target.applyHotCues(hotCueLibrary.cues(for: id)) }
             switch deck {
             case .a: bpmTapA.reset()
             case .b: bpmTapB.reset()
@@ -494,6 +502,26 @@ final class AudioEngine {
     }
 
     // MARK: - Transport and Realtime Controls
+
+    func activateHotCue(deck: DeckID, slot: HotCueSlot) {
+        let target = deck == .a ? _deckA : _deckB
+        if target.activateHotCue(slot) { publishHotCues(from: target) }
+    }
+
+    func clearHotCue(deck: DeckID, slot: HotCueSlot) {
+        let target = deck == .a ? _deckA : _deckB
+        if target.clearHotCue(slot) { publishHotCues(from: target) }
+    }
+
+    private func publishHotCues(from source: Deck) {
+        guard let id = source.trackID else { return }
+        hotCueLibrary.update(source.hotCues, for: id)
+        for deck in decks where deck !== source && deck.trackID == id {
+            deck.applyHotCues(source.hotCues)
+        }
+    }
+
+    func flushHotCues() async -> Bool { await hotCueLibrary.flush() }
 
     func togglePlayPause(deck: DeckID) {
         (deck == .a ? _deckA : _deckB).togglePlayPause()

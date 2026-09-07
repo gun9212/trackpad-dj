@@ -25,6 +25,8 @@ enum DJAction: Equatable, Sendable {
     case load(DeckID)
     case togglePlay(DeckID)
     case cue(DeckID)
+    case activateHotCue(DeckID, HotCueSlot)
+    case clearHotCue(DeckID, HotCueSlot)
     case nudge(DeckID, Float)
     case adjustFilter(DeckID, Float)
     case adjustVolume(DeckID, Float)
