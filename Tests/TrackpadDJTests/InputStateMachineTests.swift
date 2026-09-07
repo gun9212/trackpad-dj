@@ -97,7 +97,7 @@ final class InputStateMachineTests: XCTestCase {
         )
         assertSingleValue(
             machine.process(.moved([point(first, x: 0.8, y: 0.92, time: 0.02)])),
-            expected: .scratch(deck: .b, value: 6.6)
+            expected: .scratch(deck: .b, value: 3.3)
         )
     }
 
@@ -126,7 +126,7 @@ final class InputStateMachineTests: XCTestCase {
         XCTAssertEqual(machine.process(.ended([id])), [.endScratch(.a)])
     }
 
-    func testPitchBendClampsAndZerosAfterFiftyMilliseconds() {
+    func testPitchBendClampsAndZerosAfterTwentyMilliseconds() {
         var machine = GestureStateMachine()
         let id = TouchID(rawValue: 1)
 
@@ -141,8 +141,8 @@ final class InputStateMachineTests: XCTestCase {
             machine.process(.moved([point(id, x: 0.2, y: 0.7, time: 2.01)])),
             expected: .bend(deck: .b, value: 8)
         )
-        XCTAssertEqual(machine.process(.tick(2.059)), [])
-        XCTAssertEqual(machine.process(.tick(2.061)), [.setPitchBend(.b, 0)])
+        XCTAssertEqual(machine.process(.tick(2.029)), [])
+        XCTAssertEqual(machine.process(.tick(2.031)), [.setPitchBend(.b, 0)])
         XCTAssertEqual(machine.process(.tick(2.2)), [])
         XCTAssertEqual(machine.process(.ended([id])), [.endPitchBend(.b)])
     }
@@ -196,7 +196,7 @@ final class InputStateMachineTests: XCTestCase {
         XCTAssertEqual(firstReplay, replay(trace))
         XCTAssertEqual(firstReplay.count, 4)
         XCTAssertEqual(firstReplay[0], .setScratch(.b, 0))
-        assertSingleValue([firstReplay[1]], expected: .scratch(deck: .b, value: 6.6))
+        assertSingleValue([firstReplay[1]], expected: .scratch(deck: .b, value: 3.3))
         XCTAssertEqual(firstReplay[2], .setScratch(.b, 0))
         XCTAssertEqual(firstReplay[3], .endScratch(.b))
     }
@@ -216,7 +216,7 @@ final class InputStateMachineTests: XCTestCase {
         ], deck: .b, mode: .scratch)), [.setScratch(.b, 0)])
         assertSingleValue(machine.process(.moved([
             point(first, x: 0.2, y: 0.42, time: 2.01)
-        ])), expected: .scratch(deck: .b, value: 6.6))
+        ])), expected: .scratch(deck: .b, value: 3.3))
         XCTAssertEqual(machine.process(.ended([second])), [.endScratch(.b)])
         XCTAssertEqual(machine.process(.tick(3)), [])
     }
@@ -235,7 +235,7 @@ final class InputStateMachineTests: XCTestCase {
                 point(anchor, x: 0.2, y: 0.4, time: time + 0.01),
                 point(moving, x: 0.6, y: 0.42, time: time + 0.01)
             ], deck: .b, mode: .pitchBend)
-            assertSingleValue(machine.process(movement), expected: .scratch(deck: .a, value: 6.6))
+            assertSingleValue(machine.process(movement), expected: .scratch(deck: .a, value: 3.3))
             XCTAssertEqual(machine.process(movement), []) // Same event can reach multiple callbacks.
             XCTAssertEqual(machine.process(.tick(time + 0.07)), [.setScratch(.a, 0)])
             // No explicit ended event: the full frame must release the missing finger.
@@ -266,7 +266,7 @@ final class InputStateMachineTests: XCTestCase {
             point(a, x: 0.2, y: 0.405, time: 0.02),
             point(b, x: 0.6, y: 0.405, time: 0.02),
             point(c, x: 0.9, y: 0.7, time: 0.02)
-        ], deck: .a, mode: .scratch)), [])
+        ], deck: .a, mode: .scratch)), [.setPitchBend(.b, 0)])
         XCTAssertEqual(machine.process(.cancelled), [.endPitchBend(.b)])
     }
 

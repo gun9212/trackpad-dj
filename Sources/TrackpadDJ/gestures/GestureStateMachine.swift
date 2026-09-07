@@ -17,7 +17,7 @@ struct GestureStateMachine {
         var scratchRange: ClosedRange<Double> = -8.0...8.0
         var bendSensitivity: Double = 8.0
         var bendRange: ClosedRange<Double> = -8.0...8.0
-        var stationaryTimeout: TimeInterval = 0.050
+        var stationaryTimeout: TimeInterval = 0.020
 
         static let `default` = Configuration()
     }
@@ -99,18 +99,21 @@ struct GestureStateMachine {
 
             let deltaY = touch.position.y - previous.position.y
             let elapsed = touch.timestamp - previous.timestamp
-            if elapsed > 0, deltaY != 0 {
+            if elapsed > 0 {
                 velocities.append(Double(deltaY) / elapsed)
-                lastMovement = max(lastMovement ?? touch.timestamp, touch.timestamp)
+                if deltaY != 0 {
+                    lastMovement = max(lastMovement ?? touch.timestamp, touch.timestamp)
+                }
             }
             current?.lastPoints[touch.identity] = touch
         }
 
         control = current
         guard var current, !velocities.isEmpty else { return [] }
-        // Either finger can drive the jog; moving both must not double its sensitivity.
-        let target = targetValue(velocity: velocities.reduce(0, +) / Double(velocities.count),
+        // Fixed pair denominator: tiny motion of the resting finger must not halve the rate.
+        let target = targetValue(velocity: velocities.reduce(0, +) / Double(current.lastPoints.count),
                                  mode: current.mode)
+        if target == 0, current.targetIsZero { return [] }
         current.lastMovement = lastMovement
         current.targetIsZero = target == 0
         control = current

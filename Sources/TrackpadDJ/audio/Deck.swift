@@ -25,12 +25,18 @@ final class DeckRenderer: @unchecked Sendable {
     private var consumedSeekGeneration: UInt64
     private var smoothedRate: Double = 1
     private var wasScratchActive = false
+    private let rateSmoothing: Double
+    private let gainSmoothing: Float
+    private var outputGain: Float = 1
+    private let scratchResampler = ScratchResampler()
 
     init(audio: DeckAudioData, state: DeckRealtimeState) {
         self.audio = audio
         self.state = state
         readPosition = -audio.preRollFrames
         consumedSeekGeneration = state.currentSeekGeneration
+        rateSmoothing = 1 - exp(-1 / (0.002 * audio.format.sampleRate))
+        gainSmoothing = Float(1 - exp(-1 / (0.001 * audio.format.sampleRate)))
         state.publish(readPosition: readPosition)
     }
 
@@ -58,17 +64,13 @@ final class DeckRenderer: @unchecked Sendable {
 
         isSilence.pointee = false
         let normalRate = state.normalPlaybackRate
-        let alpha = 0.3
-        if isScratchActive {
-            if !wasScratchActive {
-                smoothedRate = 0
-            }
-            smoothedRate = smoothedRate * (1 - alpha) + state.targetScratchRate * alpha
-        } else {
+        if isScratchActive, !wasScratchActive {
+            smoothedRate = 0
+        } else if !isScratchActive {
             smoothedRate = normalRate
         }
         wasScratchActive = isScratchActive
-        let advance = isScratchActive ? smoothedRate : normalRate
+        let targetRate = isScratchActive ? state.targetScratchRate : normalRate
 
         let sourceChannelCount = Int(audio.format.channelCount)
         let channelCount = min(sourceChannelCount, output.count)
@@ -76,6 +78,15 @@ final class DeckRenderer: @unchecked Sendable {
         var preFaderPeak: Float = 0
 
         for frame in 0..<Int(frameCount) {
+            if isScratchActive {
+                smoothedRate += (targetRate - smoothedRate) * rateSmoothing
+                if targetRate == 0, abs(smoothedRate) < 0.000_01 { smoothedRate = 0 }
+            }
+            let advance = isScratchActive ? smoothedRate : normalRate
+            // Fade near standstill rather than emitting a held (DC) sample indefinitely.
+            let scratchGain = isScratchActive ? Float(min(1, abs(advance) / 0.03)) : 1
+            outputGain += (scratchGain - outputGain) * gainSmoothing
+            if scratchGain == 0, outputGain < 0.000_01 { outputGain = 0 }
             let sourceIndex = Int(floor(readPosition))
 
             if sourceIndex < 0 {
@@ -99,12 +110,19 @@ final class DeckRenderer: @unchecked Sendable {
             let fraction = Float(readPosition - Double(sourceIndex))
             for channel in 0..<channelCount {
                 let samples = output[channel].mData?.assumingMemoryBound(to: Float.self)
-                let sample = Self.cubicHermite(
+                let interpolated = Self.cubicHermite(
                     channelData[channel],
                     at: sourceIndex,
                     fraction: fraction,
                     totalFrames: totalFrames
                 )
+                let speed = abs(advance)
+                let filtered = isScratchActive && speed > 1
+                    ? scratchResampler.sample(channelData[channel], position: readPosition,
+                                              speed: speed, frameCount: totalFrames)
+                    : interpolated
+                let wet = isScratchActive ? Float(min(1, max(0, (speed - 1) * 4))) : 0
+                let sample = (interpolated + (filtered - interpolated) * wet) * outputGain
                 samples?[frame] = sample
                 preFaderPeak = max(preFaderPeak, abs(sample))
             }
