@@ -10,9 +10,8 @@ final class TouchLabView: NSView {
 
     private var gestureStateMachine = GestureStateMachine()
     private var keyboardStateMachine = KeyboardStateMachine()
-    private let cursorLockController = CursorLockController()
+    private let cursorLockController: CursorLockController
     private var touchIDs: [NSObject: TouchID] = [:]
-    private var controlTouchIDs: Set<TouchID> = []
     private var isControlTouchSequence = false
     private var nextTouchID: UInt64 = 1
     private var inputTimer: Timer?
@@ -41,11 +40,19 @@ final class TouchLabView: NSView {
     var isCursorLocked: Bool { cursorLockController.isLocked }
 
     override init(frame frameRect: NSRect) {
+        cursorLockController = CursorLockController()
+        super.init(frame: frameRect)
+        configureTouchInput()
+    }
+
+    init(frame frameRect: NSRect, cursorLockController: CursorLockController) {
+        self.cursorLockController = cursorLockController
         super.init(frame: frameRect)
         configureTouchInput()
     }
 
     required init?(coder: NSCoder) {
+        cursorLockController = CursorLockController()
         super.init(coder: coder)
         configureTouchInput()
     }
@@ -55,7 +62,8 @@ final class TouchLabView: NSView {
 
     private func configureTouchInput() {
         allowedTouchTypes = [.indirect]
-        wantsRestingTouches = false
+        // Keep physical contacts stable when the driver reclassifies a finger as resting.
+        wantsRestingTouches = true
         wantsLayer = true
     }
 
@@ -216,53 +224,61 @@ final class TouchLabView: NSView {
     // MARK: - Touch Events
 
     override func touchesBegan(with event: NSEvent) {
+        processTouchFrame(event)
+    }
+
+    override func touchesMoved(with event: NSEvent) {
+        processTouchFrame(event)
+    }
+
+    override func touchesEnded(with event: NSEvent) {
+        processTouchFrame(event)
+    }
+
+    private func processTouchFrame(_ event: NSEvent) {
         let sequenceWasEmpty = touchIDs.isEmpty
-        let points = sortedTouches(event.touches(matching: .began, in: self)).compactMap {
+        let touches = sortedTouches(event.touches(matching: .touching, in: self))
+        let present = Set(touches.map { $0.identity as! NSObject })
+        touchIDs = touchIDs.filter { present.contains($0.key) }
+        let points = touches.compactMap {
             touchPoint(for: $0, timestamp: event.timestamp, createIdentity: true)
         }
+        handleTouchFrame(
+            points,
+            sequenceWasEmpty: sequenceWasEmpty,
+            mode: event.modifierFlags.contains(.shift) ? .pitchBend : .scratch,
+            controlUnderPointer: PerformanceLayout(bounds: bounds).control(at: cursorPointInView())
+        )
+    }
+
+    // Normalized input boundary, also used by deterministic UI interaction tests.
+    func handleTouchFrame(
+        _ points: [TouchPoint],
+        sequenceWasEmpty: Bool,
+        mode: JogMode,
+        controlUnderPointer: PerformanceControl?
+    ) {
+        let previousCount = gestureStateMachine.session.count
         if TouchRoutingPolicy.reservesSequenceForControl(
             sequenceWasEmpty: sequenceWasEmpty,
             cursorLocked: isCursorLocked,
-            controlUnderPointer: PerformanceLayout(bounds: bounds).control(at: cursorPointInView())
+            controlUnderPointer: controlUnderPointer
         ) {
             isControlTouchSequence = true
         }
         if isControlTouchSequence {
-            controlTouchIDs.formUnion(points.map(\.identity))
+            if points.isEmpty { isControlTouchSequence = false }
             needsDisplay = true
             return
         }
-        let mode: JogMode = event.modifierFlags.contains(.shift) ? .pitchBend : .scratch
+        if points.count >= 2 { pressedControl = nil }
         emit(gestureStateMachine.process(
-            .began(points, deck: keyboardStateMachine.activeDeck, mode: mode)
+            .frame(points, deck: keyboardStateMachine.activeDeck, mode: mode)
         ))
         syncSession()
-    }
-
-    override func touchesMoved(with event: NSEvent) {
-        guard !isControlTouchSequence else { return }
-        let points = sortedTouches(event.touches(matching: .moved, in: self)).compactMap {
-            touchPoint(for: $0, timestamp: event.timestamp, createIdentity: false)
+        if previousCount >= 2, points.count == 1 {
+            restoreCursor()
         }
-        emit(gestureStateMachine.process(.moved(points)))
-        syncSession()
-    }
-
-    override func touchesEnded(with event: NSEvent) {
-        let endedTouches = sortedTouches(event.touches(matching: .ended, in: self))
-        let identities = endedTouches.compactMap { touchID(for: $0, create: false) }
-        if isControlTouchSequence {
-            controlTouchIDs.subtract(identities)
-        } else {
-            emit(gestureStateMachine.process(.ended(identities)))
-        }
-        for touch in endedTouches {
-            touchIDs.removeValue(forKey: touch.identity as! NSObject)
-        }
-        if isControlTouchSequence, controlTouchIDs.isEmpty {
-            isControlTouchSequence = false
-        }
-        syncSession()
     }
 
     override func touchesCancelled(with event: NSEvent) {
@@ -317,7 +333,6 @@ final class TouchLabView: NSView {
         keyboardStateMachine.focusLost()
         emit(gestureStateMachine.process(.cancelled))
         touchIDs.removeAll(keepingCapacity: true)
-        controlTouchIDs.removeAll(keepingCapacity: true)
         isControlTouchSequence = false
         hoveredControl = nil
         pressedControl = nil
@@ -328,7 +343,6 @@ final class TouchLabView: NSView {
     private func cancelJogAndUnlock() {
         emit(gestureStateMachine.process(.cancelled))
         touchIDs.removeAll(keepingCapacity: true)
-        controlTouchIDs.removeAll(keepingCapacity: true)
         isControlTouchSequence = false
         hoveredControl = nil
         pressedControl = nil
@@ -423,7 +437,7 @@ final class TouchLabView: NSView {
     }
 
     override func mouseDown(with event: NSEvent) {
-        guard !isCursorLocked, gestureStateMachine.session.count == 0 else { return }
+        guard !isCursorLocked, gestureStateMachine.session.count < 2 else { return }
         let point = convert(event.locationInWindow, from: nil)
         guard let control = PerformanceLayout(bounds: bounds).control(at: point),
               isControlEnabled(control) else {
@@ -445,7 +459,8 @@ final class TouchLabView: NSView {
         let releasedControl = PerformanceLayout(bounds: bounds).control(at: point)
         self.pressedControl = nil
         hoveredControl = releasedControl
-        if releasedControl == pressedControl, isControlEnabled(pressedControl) {
+        if !isCursorLocked, gestureStateMachine.session.count < 2,
+           releasedControl == pressedControl, isControlEnabled(pressedControl) {
             activate(pressedControl)
         }
         needsDisplay = true

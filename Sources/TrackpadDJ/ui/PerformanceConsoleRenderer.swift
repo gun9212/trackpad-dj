@@ -812,14 +812,14 @@ struct PerformanceConsoleRenderer {
         line.stroke()
 
         drawText(
-            "TAB  SWITCH     ⇧ + TOUCH  BEND     P  CURSOR     ESC  RELEASE",
+            "TAB  SWITCH     ⇧ + 2 FINGERS  BEND     P  CURSOR     ESC  RELEASE",
             in: NSRect(x: rect.minX, y: rect.minY + 9, width: rect.width * 0.58, height: 13),
             font: .monospacedSystemFont(ofSize: 8, weight: .medium),
             color: ConsolePalette.secondaryText
         )
         let status = cursorStatusMessage
             ?? statusMessage
-            ?? "TRACKPAD = JOG  /  BUTTON HOVER = CLICK"
+            ?? "2 FINGERS = JOG  /  BUTTON HOVER = CLICK"
         drawText(
             status,
             in: NSRect(

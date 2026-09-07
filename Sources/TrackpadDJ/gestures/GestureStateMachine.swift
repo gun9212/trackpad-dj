@@ -2,6 +2,7 @@ import CoreGraphics
 import Foundation
 
 enum GestureInputEvent: Equatable, Sendable {
+    case frame([TouchPoint], deck: DeckID, mode: JogMode)
     case began([TouchPoint], deck: DeckID, mode: JogMode)
     case moved([TouchPoint])
     case ended([TouchID])
@@ -16,16 +17,15 @@ struct GestureStateMachine {
         var scratchRange: ClosedRange<Double> = -8.0...8.0
         var bendSensitivity: Double = 8.0
         var bendRange: ClosedRange<Double> = -8.0...8.0
-        var stationaryTimeout: TimeInterval = 0.050
+        var stationaryTimeout: TimeInterval = 0.020
 
         static let `default` = Configuration()
     }
 
     private struct ControlState {
-        let identity: TouchID
+        var lastPoints: [TouchID: TouchPoint]
         let deck: DeckID
         let mode: JogMode
-        var lastPoint: TouchPoint
         var lastMovement: TimeInterval?
         var targetIsZero = true
     }
@@ -33,7 +33,6 @@ struct GestureStateMachine {
     let configuration: Configuration
     private(set) var session: TouchSession = .empty
     private var control: ControlState?
-    private var controllerClaimedForSession = false
 
     init(configuration: Configuration = .default) {
         self.configuration = configuration
@@ -41,6 +40,14 @@ struct GestureStateMachine {
 
     mutating func process(_ event: GestureInputEvent) -> [DJAction] {
         switch event {
+        case .frame(let touches, let deck, let mode):
+            // Reconcile the complete touching set so a missed end cannot retain a ghost controller.
+            let present = Set(touches.map(\.identity))
+            var actions = touchesEnded(session.activeTouches.keys.filter { !present.contains($0) })
+            let newTouches = touches.filter { session.activeTouches[$0.identity] == nil }
+            actions += touchesBegan(newTouches, deck: deck, mode: mode)
+            actions += touchesMoved(touches)
+            return actions
         case .began(let touches, let deck, let mode):
             return touchesBegan(touches, deck: deck, mode: mode)
         case .moved(let touches):
@@ -60,48 +67,57 @@ struct GestureStateMachine {
         mode: JogMode
     ) -> [DJAction] {
         let sorted = touches.sorted(by: Self.touchOrder)
-        let sessionWasEmpty = session.count == 0
+        let previousCount = session.count
         for touch in sorted {
             session = session.adding(touch)
         }
 
-        guard sessionWasEmpty,
-              !controllerClaimedForSession,
-              let first = sorted.first else { return [] }
+        guard previousCount < 2, session.count >= 2, control == nil,
+              let activationTime = sorted.last?.timestamp else { return [] }
 
-        controllerClaimedForSession = true
+        let pair = session.activeTouches.values.sorted(by: Self.touchOrder).prefix(2)
         control = ControlState(
-            identity: first.identity,
+            lastPoints: Dictionary(uniqueKeysWithValues: pair.map {
+                ($0.identity, TouchPoint(identity: $0.identity, position: $0.position,
+                                        timestamp: activationTime))
+            }),
             deck: deck,
-            mode: mode,
-            lastPoint: first
+            mode: mode
         )
         return [startAction(deck: deck, mode: mode)]
     }
 
     private mutating func touchesMoved(_ touches: [TouchPoint]) -> [DJAction] {
-        var action: DJAction?
+        var current = control
+        var velocities: [Double] = []
+        var lastMovement: TimeInterval?
 
         for touch in touches.sorted(by: Self.touchOrder) {
             guard session.activeTouches[touch.identity] != nil else { continue }
             session = session.updating(touch)
-            guard var current = control,
-                  current.identity == touch.identity else { continue }
+            guard let previous = current?.lastPoints[touch.identity] else { continue }
 
-            let deltaY = touch.position.y - current.lastPoint.position.y
-            let elapsed = touch.timestamp - current.lastPoint.timestamp
-            if elapsed > 0, deltaY != 0 {
-                let velocity = Double(deltaY) / elapsed
-                let target = targetValue(velocity: velocity, mode: current.mode)
-                action = updateAction(deck: current.deck, mode: current.mode, value: target)
-                current.lastMovement = touch.timestamp
-                current.targetIsZero = target == 0
+            let deltaY = touch.position.y - previous.position.y
+            let elapsed = touch.timestamp - previous.timestamp
+            if elapsed > 0 {
+                velocities.append(Double(deltaY) / elapsed)
+                if deltaY != 0 {
+                    lastMovement = max(lastMovement ?? touch.timestamp, touch.timestamp)
+                }
             }
-            current.lastPoint = touch
-            control = current
+            current?.lastPoints[touch.identity] = touch
         }
 
-        return action.map { [$0] } ?? []
+        control = current
+        guard var current, !velocities.isEmpty else { return [] }
+        // Fixed pair denominator: tiny motion of the resting finger must not halve the rate.
+        let target = targetValue(velocity: velocities.reduce(0, +) / Double(current.lastPoints.count),
+                                 mode: current.mode)
+        if target == 0, current.targetIsZero { return [] }
+        current.lastMovement = lastMovement
+        current.targetIsZero = target == 0
+        control = current
+        return [updateAction(deck: current.deck, mode: current.mode, value: target)]
     }
 
     private mutating func touchesEnded(_ identities: [TouchID]) -> [DJAction] {
@@ -109,14 +125,15 @@ struct GestureStateMachine {
 
         for identity in identities.sorted() {
             session = session.removing(identity: identity)
-            if let current = control, current.identity == identity {
+            if let current = control, current.lastPoints[identity] != nil {
                 actions.append(endAction(deck: current.deck, mode: current.mode))
                 control = nil
             }
         }
 
-        if session.count == 0 {
-            controllerClaimedForSession = false
+        if session.count < 2, let current = control {
+            actions.append(endAction(deck: current.deck, mode: current.mode))
+            control = nil
         }
         return actions
     }
@@ -125,7 +142,6 @@ struct GestureStateMachine {
         let actions = control.map { [endAction(deck: $0.deck, mode: $0.mode)] } ?? []
         session = .empty
         control = nil
-        controllerClaimedForSession = false
         return actions
     }
 

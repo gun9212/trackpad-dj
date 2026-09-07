@@ -110,6 +110,41 @@ final class DeckRealtimeStateTests: XCTestCase {
         XCTAssertEqual(rendered[7], 0, accuracy: 0.0001)
     }
 
+    func testScratchAtTrackEndPreservesTransportAndCanReverseBack() throws {
+        let format = try XCTUnwrap(AVAudioFormat(standardFormatWithSampleRate: 8_000, channels: 1))
+        let source = try XCTUnwrap(AVAudioPCMBuffer(pcmFormat: format, frameCapacity: 100))
+        source.frameLength = 100
+        let samples = try XCTUnwrap(source.floatChannelData?[0])
+        for index in 0..<100 { samples[index] = 0.25 }
+        let output = try XCTUnwrap(AVAudioPCMBuffer(pcmFormat: format, frameCapacity: 8))
+        output.frameLength = 8
+
+        for playing in [true, false] {
+            let state = DeckRealtimeState()
+            let renderer = DeckRenderer(
+                audio: DeckAudioData(buffer: source, format: format, preRollFrames: 0), state: state
+            )
+            state.setPlaying(playing)
+            state.requestSeek(to: 99)
+            state.setScratch(active: true, rate: 8)
+            var silence = ObjCBool(false)
+            renderer.render(isSilence: &silence, frameCount: 8, audioBufferList: output.mutableAudioBufferList)
+            XCTAssertEqual(state.publicReadPosition, 100)
+            XCTAssertEqual(state.isPlaying, playing)
+
+            state.setScratch(active: true, rate: -8)
+            for _ in 0..<3 {
+                renderer.render(isSilence: &silence, frameCount: 8, audioBufferList: output.mutableAudioBufferList)
+            }
+            let position = state.publicReadPosition
+            XCTAssertLessThan(position, 100)
+            state.setScratch(active: false, rate: 0)
+            renderer.render(isSilence: &silence, frameCount: 8, audioBufferList: output.mutableAudioBufferList)
+            XCTAssertEqual(state.isPlaying, playing)
+            XCTAssertEqual(state.publicReadPosition, position + (playing ? 8 : 0), accuracy: 0.000_001)
+        }
+    }
+
     func testRendererPublishesActualMultichannelPreFaderPeak() throws {
         let format = try XCTUnwrap(AVAudioFormat(
             commonFormat: .pcmFormatFloat32,
