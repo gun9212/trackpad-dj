@@ -23,17 +23,20 @@ struct LoadedTrack: @unchecked Sendable {
     let audio: DeckAudioData
     let waveformSamples: [Float]
     let beatGrid: BeatGrid?
+    let trackID: TrackID?
 
     init(
         name: String,
         audio: DeckAudioData,
         waveformSamples: [Float],
-        beatGrid: BeatGrid? = nil
+        beatGrid: BeatGrid? = nil,
+        trackID: TrackID? = nil
     ) {
         self.name = name
         self.audio = audio
         self.waveformSamples = waveformSamples
         self.beatGrid = beatGrid
+        self.trackID = trackID
     }
 
     var duration: TimeInterval {
@@ -77,7 +80,8 @@ struct TrackLoader: TrackLoading, Sendable {
             name: url.deletingPathExtension().lastPathComponent,
             audio: audio,
             waveformSamples: downsample(buffer, targetCount: 800),
-            beatGrid: BeatGridAnalyzer.analyze(buffer)
+            beatGrid: BeatGridAnalyzer.analyze(buffer),
+            trackID: try? TrackID.fingerprint(url: url)
         )
     }
 
@@ -118,10 +122,12 @@ enum TrackLoadOutcome: Sendable {
 @MainActor
 final class TrackLoadCoordinator {
     private let loader: any TrackLoading
+    private let hotCueLibrary: HotCueLibrary?
     private var generationByDeck: [DeckID: UInt64] = [.a: 0, .b: 0]
 
-    init(loader: any TrackLoading) {
+    init(loader: any TrackLoading, hotCueLibrary: HotCueLibrary? = nil) {
         self.loader = loader
+        self.hotCueLibrary = hotCueLibrary
     }
 
     func load(url: URL, deck: DeckID) async throws -> TrackLoadOutcome {
@@ -129,6 +135,7 @@ final class TrackLoadCoordinator {
 
         do {
             let track = try await loader.load(url: url)
+            if let id = track.trackID { await hotCueLibrary?.restore(id) }
             guard generationByDeck[deck] == generation else { return .superseded }
             return .ready(track)
         } catch {
