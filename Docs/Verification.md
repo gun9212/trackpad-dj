@@ -1,5 +1,13 @@
 # Trackpad DJ 검증 기록
 
+## 2026-09-07 반복 조그 이동 무시 후속 수정
+
+- 두 번째 손가락만 움직이면 스크래치 명령이 나오지 않는 기존 경로를 테스트 FAIL로 재현하고 수정 후 PASS를 확인했다. 시작한 두 손가락 중 움직이는 손가락들의 속도를 평균하며 세 번째 터치는 여전히 무시한다.
+- 매 터치 콜백의 전체 `.touching` 목록으로 상태를 갱신해 누락된 종료를 복구한다. 동일 이벤트 중복 전달과 한 손가락을 남긴 채 다른 손가락을 100회 교체하는 입력을 테스트한다.
+- [Apple 터치 이벤트 문서](https://developer.apple.com/library/archive/documentation/Cocoa/Conceptual/EventOverview/HandlingTouchEvents/HandlingTouchEvents.html)의 resting 상태 전환 동작에 따라 `wantsRestingTouches`를 활성화해 물리 접촉을 계속 수신한다.
+- 실제 사용자 현상의 이벤트 로그는 확보하지 않았으므로 원인 전체를 확정하지 않는다. 반복 조작의 물리 입력과 오디오 청취는 사용자 확인이 필요하다.
+- `swift build`, `swift test` (60 tests, 0 failures), `Scripts/verify-strict-concurrency.sh`, `git diff --check`: PASS.
+
 ## 2026-09-07 두 손가락 조그 및 스크래치 복귀 수정
 
 - 한 손가락은 조그를 시작하지 않고, 두 번째 손가락 인식 시 덱·모드를 고정한다. 한 손가락만 남으면 해제하며 다시 두 손가락이 되면 새 조그를 시작한다.

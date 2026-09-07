@@ -12,7 +12,6 @@ final class TouchLabView: NSView {
     private var keyboardStateMachine = KeyboardStateMachine()
     private let cursorLockController = CursorLockController()
     private var touchIDs: [NSObject: TouchID] = [:]
-    private var controlTouchIDs: Set<TouchID> = []
     private var isControlTouchSequence = false
     private var nextTouchID: UInt64 = 1
     private var inputTimer: Timer?
@@ -55,7 +54,8 @@ final class TouchLabView: NSView {
 
     private func configureTouchInput() {
         allowedTouchTypes = [.indirect]
-        wantsRestingTouches = false
+        // Keep physical contacts stable when the driver reclassifies a finger as resting.
+        wantsRestingTouches = true
         wantsLayer = true
     }
 
@@ -216,8 +216,23 @@ final class TouchLabView: NSView {
     // MARK: - Touch Events
 
     override func touchesBegan(with event: NSEvent) {
+        processTouchFrame(event)
+    }
+
+    override func touchesMoved(with event: NSEvent) {
+        processTouchFrame(event)
+    }
+
+    override func touchesEnded(with event: NSEvent) {
+        processTouchFrame(event)
+    }
+
+    private func processTouchFrame(_ event: NSEvent) {
         let sequenceWasEmpty = touchIDs.isEmpty
-        let points = sortedTouches(event.touches(matching: .began, in: self)).compactMap {
+        let touches = sortedTouches(event.touches(matching: .touching, in: self))
+        let present = Set(touches.map { $0.identity as! NSObject })
+        touchIDs = touchIDs.filter { present.contains($0.key) }
+        let points = touches.compactMap {
             touchPoint(for: $0, timestamp: event.timestamp, createIdentity: true)
         }
         if TouchRoutingPolicy.reservesSequenceForControl(
@@ -228,40 +243,14 @@ final class TouchLabView: NSView {
             isControlTouchSequence = true
         }
         if isControlTouchSequence {
-            controlTouchIDs.formUnion(points.map(\.identity))
+            if points.isEmpty { isControlTouchSequence = false }
             needsDisplay = true
             return
         }
         let mode: JogMode = event.modifierFlags.contains(.shift) ? .pitchBend : .scratch
         emit(gestureStateMachine.process(
-            .began(points, deck: keyboardStateMachine.activeDeck, mode: mode)
+            .frame(points, deck: keyboardStateMachine.activeDeck, mode: mode)
         ))
-        syncSession()
-    }
-
-    override func touchesMoved(with event: NSEvent) {
-        guard !isControlTouchSequence else { return }
-        let points = sortedTouches(event.touches(matching: .moved, in: self)).compactMap {
-            touchPoint(for: $0, timestamp: event.timestamp, createIdentity: false)
-        }
-        emit(gestureStateMachine.process(.moved(points)))
-        syncSession()
-    }
-
-    override func touchesEnded(with event: NSEvent) {
-        let endedTouches = sortedTouches(event.touches(matching: .ended, in: self))
-        let identities = endedTouches.compactMap { touchID(for: $0, create: false) }
-        if isControlTouchSequence {
-            controlTouchIDs.subtract(identities)
-        } else {
-            emit(gestureStateMachine.process(.ended(identities)))
-        }
-        for touch in endedTouches {
-            touchIDs.removeValue(forKey: touch.identity as! NSObject)
-        }
-        if isControlTouchSequence, controlTouchIDs.isEmpty {
-            isControlTouchSequence = false
-        }
         syncSession()
     }
 
@@ -317,7 +306,6 @@ final class TouchLabView: NSView {
         keyboardStateMachine.focusLost()
         emit(gestureStateMachine.process(.cancelled))
         touchIDs.removeAll(keepingCapacity: true)
-        controlTouchIDs.removeAll(keepingCapacity: true)
         isControlTouchSequence = false
         hoveredControl = nil
         pressedControl = nil
@@ -328,7 +316,6 @@ final class TouchLabView: NSView {
     private func cancelJogAndUnlock() {
         emit(gestureStateMachine.process(.cancelled))
         touchIDs.removeAll(keepingCapacity: true)
-        controlTouchIDs.removeAll(keepingCapacity: true)
         isControlTouchSequence = false
         hoveredControl = nil
         pressedControl = nil
