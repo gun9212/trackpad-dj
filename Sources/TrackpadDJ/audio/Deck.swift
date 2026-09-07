@@ -29,6 +29,11 @@ final class DeckRenderer: @unchecked Sendable {
     private let gainSmoothing: Float
     private var outputGain: Float = 1
     private let scratchResampler = ScratchResampler()
+    private var jumpOldPosition: Double = 0
+    private var jumpOldRate: Double = 0
+    private var jumpOldGain: Float = 0
+    private var jumpFramesRemaining = 0
+    private let jumpFrameCount: Int
 
     init(audio: DeckAudioData, state: DeckRealtimeState) {
         self.audio = audio
@@ -37,6 +42,7 @@ final class DeckRenderer: @unchecked Sendable {
         consumedSeekGeneration = state.currentSeekGeneration
         rateSmoothing = 1 - exp(-1 / (0.002 * audio.format.sampleRate))
         gainSmoothing = Float(1 - exp(-1 / (0.001 * audio.format.sampleRate)))
+        jumpFrameCount = max(1, Int(audio.format.sampleRate * 0.002))
         state.publish(readPosition: readPosition)
     }
 
@@ -49,6 +55,15 @@ final class DeckRenderer: @unchecked Sendable {
         clear(output)
 
         if let command = state.seekCommand(after: consumedSeekGeneration) {
+            if command.startsPlayback {
+                jumpOldPosition = readPosition
+                jumpOldRate = wasScratchActive ? smoothedRate : state.normalPlaybackRate
+                jumpOldGain = state.isPlaying || state.isScratchActive ? outputGain : 0
+                jumpFramesRemaining = jumpFrameCount
+                state.setPlaying(true)
+            } else {
+                jumpFramesRemaining = 0
+            }
             consumedSeekGeneration = command.generation
             readPosition = clampPosition(command.targetFrame)
         }
@@ -122,12 +137,25 @@ final class DeckRenderer: @unchecked Sendable {
                                               speed: speed, frameCount: totalFrames)
                     : interpolated
                 let wet = isScratchActive ? Float(min(1, max(0, (speed - 1) * 4))) : 0
-                let sample = (interpolated + (filtered - interpolated) * wet) * outputGain
+                var sample = (interpolated + (filtered - interpolated) * wet) * outputGain
+                if jumpFramesRemaining > 0 {
+                    let oldIndex = Int(floor(jumpOldPosition))
+                    let oldSample: Float = oldIndex >= 0 && oldIndex < totalFrames
+                        ? Self.cubicHermite(channelData[channel], at: oldIndex,
+                                            fraction: Float(jumpOldPosition - Double(oldIndex)),
+                                            totalFrames: totalFrames) * jumpOldGain : 0
+                    let oldWeight = Float(jumpFramesRemaining) / Float(jumpFrameCount)
+                    sample = oldSample * oldWeight + sample * (1 - oldWeight)
+                }
                 samples?[frame] = sample
                 preFaderPeak = max(preFaderPeak, abs(sample))
             }
 
             readPosition = clampPosition(readPosition + advance)
+            if jumpFramesRemaining > 0 {
+                jumpOldPosition = clampPosition(jumpOldPosition + jumpOldRate)
+                jumpFramesRemaining -= 1
+            }
         }
 
         state.publish(readPosition: readPosition)
@@ -193,6 +221,8 @@ final class Deck: DeckProtocol {
     private(set) var waveformSamples: [Float] = []
     private(set) var beatGrid: BeatGrid?
     private(set) var automaticBeatGrid: BeatGrid?
+    private(set) var trackID: TrackID?
+    private(set) var hotCues: [Double?] = Array(repeating: nil, count: 4)
 
     private var realtimeState = DeckRealtimeState()
     private var audioData: DeckAudioData?
@@ -246,6 +276,8 @@ final class Deck: DeckProtocol {
 
         realtimeState = state
         trackName = track.name
+        trackID = track.trackID
+        hotCues = Array(repeating: nil, count: 4)
         processingFormat = track.audio.format
         waveformSamples = track.waveformSamples
         automaticBeatGrid = track.beatGrid
@@ -270,6 +302,35 @@ final class Deck: DeckProtocol {
         guard let audioData else { return }
         realtimeState.setPlaying(false)
         realtimeState.requestSeek(to: -audioData.preRollFrames)
+    }
+
+    func applyHotCues(_ positions: [Double?]) {
+        hotCues = HotCueSlot.allCases.map { slot in
+            guard positions.indices.contains(slot.index), let time = positions[slot.index],
+                  time.isFinite, time >= 0, time < duration else { return nil }
+            return time
+        }
+    }
+
+    /// Returns true only when an empty slot was filled; calls never overwrite saved cues.
+    @discardableResult
+    func activateHotCue(_ slot: HotCueSlot) -> Bool {
+        guard let audioData, audioData.frameLength > 0 else { return false }
+        if let time = hotCues[slot.index] {
+            realtimeState.requestSeek(to: min(audioData.frameLength - 1, time * audioData.format.sampleRate),
+                                      startsPlayback: true)
+            return false
+        }
+        let frame = min(audioData.frameLength - 1, max(0, realtimeState.publicReadPosition))
+        hotCues[slot.index] = frame / audioData.format.sampleRate
+        return true
+    }
+
+    @discardableResult
+    func clearHotCue(_ slot: HotCueSlot) -> Bool {
+        guard hotCues[slot.index] != nil else { return false }
+        hotCues[slot.index] = nil
+        return true
     }
 
     func scrub(normalizedDelta: Double) {

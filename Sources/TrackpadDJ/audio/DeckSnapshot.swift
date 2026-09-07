@@ -19,6 +19,8 @@ struct DeckSnapshot: Equatable, Sendable {
     let faderLevel: Float
     let filterLevel: Float
     let monitorEnabled: Bool
+    var hotCues: [Double?] = Array(repeating: nil, count: 4)
+    var hotCueStorageMessage: String? = nil
 
     static func empty(deck: DeckID) -> DeckSnapshot {
         DeckSnapshot(

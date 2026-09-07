@@ -21,6 +21,10 @@ protocol DeckProtocol: AnyObject {
     func install(_ track: LoadedTrack)
     func togglePlayPause()
     func cue()
+    var hotCues: [Double?] { get }
+    func applyHotCues(_ positions: [Double?])
+    @discardableResult func activateHotCue(_ slot: HotCueSlot) -> Bool
+    @discardableResult func clearHotCue(_ slot: HotCueSlot) -> Bool
 
     // MARK: - Jog / Scrub
 
