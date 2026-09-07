@@ -4,6 +4,81 @@ import XCTest
 
 final class PerformanceUITests: XCTestCase {
 
+    @MainActor
+    func testLiftingOneFingerRestoresCursorExactlyOnceWithoutAutomaticRelock() throws {
+        let system = JogCursorSystem()
+        let lock = CursorLockController(system: system)
+        try lock.lock(windowIsKey: true, cursorInsideContent: true)
+        let view = TouchLabView(frame: NSRect(x: 0, y: 0, width: 1180, height: 720), cursorLockController: lock)
+        let pair = (1...2).map {
+            TouchPoint(identity: TouchID(rawValue: UInt64($0)), position: CGPoint(x: 0.2 * Double($0), y: 0.5), timestamp: 0)
+        }
+        view.handleTouchFrame(pair, sequenceWasEmpty: true, mode: .scratch, controlUnderPointer: nil)
+        XCTAssertTrue(view.isCursorLocked)
+        for _ in 0..<2 {
+            view.handleTouchFrame([pair[0]], sequenceWasEmpty: false, mode: .scratch, controlUnderPointer: nil)
+        }
+        XCTAssertFalse(view.isCursorLocked)
+        view.handleTouchFrame(pair, sequenceWasEmpty: false, mode: .scratch, controlUnderPointer: nil)
+        XCTAssertFalse(view.isCursorLocked)
+        view.shutdown()
+        XCTAssertEqual(system.associations, [false, true])
+        XCTAssertEqual(system.hides, 1)
+        XCTAssertEqual(system.unhides, 1)
+    }
+
+    @MainActor
+    private final class JogCursorSystem: CursorSystemControlling {
+        var associations: [Bool] = []
+        var hides = 0
+        var unhides = 0
+        func associateMouseAndCursor(_ connected: Bool) -> CGError {
+            associations.append(connected)
+            return .success
+        }
+        func hideCursor() { hides += 1 }
+        func unhideCursor() { unhides += 1 }
+    }
+
+    @MainActor
+    func testRemainingFingerCanClickAfterJogAndSecondFingerCancelsPendingClick() throws {
+        let view = TouchLabView(frame: NSRect(x: 0, y: 0, width: 1180, height: 720))
+        var actions: [DJAction] = []
+        view.onAction = { actions.append($0) }
+        let first = TouchPoint(identity: TouchID(rawValue: 1), position: CGPoint(x: 0.2, y: 0.5), timestamp: 0)
+        let second = TouchPoint(identity: TouchID(rawValue: 2), position: CGPoint(x: 0.6, y: 0.5), timestamp: 0)
+        func touches(_ points: [TouchPoint], empty: Bool = false) {
+            view.handleTouchFrame(points, sequenceWasEmpty: empty, mode: .scratch, controlUnderPointer: nil)
+        }
+        let region = try XCTUnwrap(PerformanceLayout(bounds: view.bounds).controlRegions.first {
+            $0.control == .monitor(.b)
+        })
+        func mouse(_ type: NSEvent.EventType) throws -> NSEvent {
+            try XCTUnwrap(NSEvent.mouseEvent(with: type,
+                location: NSPoint(x: region.frame.midX, y: region.frame.midY),
+                modifierFlags: [], timestamp: 0, windowNumber: 0, context: nil,
+                eventNumber: 0, clickCount: 1, pressure: 1))
+        }
+        touches([first, second], empty: true)
+        view.mouseDown(with: try mouse(.leftMouseDown))
+        view.mouseUp(with: try mouse(.leftMouseUp))
+        XCTAssertEqual(actions, [.setScratch(.a, 0)])
+        touches([first])
+        XCTAssertEqual(actions.last, .endScratch(.a))
+        view.mouseDown(with: try mouse(.leftMouseDown))
+        view.mouseUp(with: try mouse(.leftMouseUp))
+        XCTAssertEqual(Array(actions.suffix(2)), [.selectActiveDeck(.b), .toggleMonitor(.b)])
+        XCTAssertEqual(view.session.count, 1)
+
+        view.mouseDown(with: try mouse(.leftMouseDown))
+        touches([first, second])
+        let beforeRelease = actions
+        view.mouseUp(with: try mouse(.leftMouseUp))
+        XCTAssertEqual(actions, beforeRelease)
+        XCTAssertEqual(actions.last, .setScratch(.b, 0))
+        view.shutdown()
+    }
+
     func testResponsiveLayoutsKeepControlsInsideBoundsWithoutOverlap() {
         let sizes = [
             NSSize(width: 960, height: 620),

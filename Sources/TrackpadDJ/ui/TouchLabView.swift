@@ -10,7 +10,7 @@ final class TouchLabView: NSView {
 
     private var gestureStateMachine = GestureStateMachine()
     private var keyboardStateMachine = KeyboardStateMachine()
-    private let cursorLockController = CursorLockController()
+    private let cursorLockController: CursorLockController
     private var touchIDs: [NSObject: TouchID] = [:]
     private var isControlTouchSequence = false
     private var nextTouchID: UInt64 = 1
@@ -40,11 +40,19 @@ final class TouchLabView: NSView {
     var isCursorLocked: Bool { cursorLockController.isLocked }
 
     override init(frame frameRect: NSRect) {
+        cursorLockController = CursorLockController()
+        super.init(frame: frameRect)
+        configureTouchInput()
+    }
+
+    init(frame frameRect: NSRect, cursorLockController: CursorLockController) {
+        self.cursorLockController = cursorLockController
         super.init(frame: frameRect)
         configureTouchInput()
     }
 
     required init?(coder: NSCoder) {
+        cursorLockController = CursorLockController()
         super.init(coder: coder)
         configureTouchInput()
     }
@@ -235,10 +243,26 @@ final class TouchLabView: NSView {
         let points = touches.compactMap {
             touchPoint(for: $0, timestamp: event.timestamp, createIdentity: true)
         }
+        handleTouchFrame(
+            points,
+            sequenceWasEmpty: sequenceWasEmpty,
+            mode: event.modifierFlags.contains(.shift) ? .pitchBend : .scratch,
+            controlUnderPointer: PerformanceLayout(bounds: bounds).control(at: cursorPointInView())
+        )
+    }
+
+    // Normalized input boundary, also used by deterministic UI interaction tests.
+    func handleTouchFrame(
+        _ points: [TouchPoint],
+        sequenceWasEmpty: Bool,
+        mode: JogMode,
+        controlUnderPointer: PerformanceControl?
+    ) {
+        let previousCount = gestureStateMachine.session.count
         if TouchRoutingPolicy.reservesSequenceForControl(
             sequenceWasEmpty: sequenceWasEmpty,
             cursorLocked: isCursorLocked,
-            controlUnderPointer: PerformanceLayout(bounds: bounds).control(at: cursorPointInView())
+            controlUnderPointer: controlUnderPointer
         ) {
             isControlTouchSequence = true
         }
@@ -247,11 +271,14 @@ final class TouchLabView: NSView {
             needsDisplay = true
             return
         }
-        let mode: JogMode = event.modifierFlags.contains(.shift) ? .pitchBend : .scratch
+        if points.count >= 2 { pressedControl = nil }
         emit(gestureStateMachine.process(
             .frame(points, deck: keyboardStateMachine.activeDeck, mode: mode)
         ))
         syncSession()
+        if previousCount >= 2, points.count == 1 {
+            restoreCursor()
+        }
     }
 
     override func touchesCancelled(with event: NSEvent) {
@@ -410,7 +437,7 @@ final class TouchLabView: NSView {
     }
 
     override func mouseDown(with event: NSEvent) {
-        guard !isCursorLocked, gestureStateMachine.session.count == 0 else { return }
+        guard !isCursorLocked, gestureStateMachine.session.count < 2 else { return }
         let point = convert(event.locationInWindow, from: nil)
         guard let control = PerformanceLayout(bounds: bounds).control(at: point),
               isControlEnabled(control) else {
@@ -432,7 +459,8 @@ final class TouchLabView: NSView {
         let releasedControl = PerformanceLayout(bounds: bounds).control(at: point)
         self.pressedControl = nil
         hoveredControl = releasedControl
-        if releasedControl == pressedControl, isControlEnabled(pressedControl) {
+        if !isCursorLocked, gestureStateMachine.session.count < 2,
+           releasedControl == pressedControl, isControlEnabled(pressedControl) {
             activate(pressedControl)
         }
         needsDisplay = true
